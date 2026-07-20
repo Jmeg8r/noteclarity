@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 12px -apple-system, "SF Pro Text", sans-serif;
+    margin: 0;
+    padding: 10px 14px;
+    color: #1e1e1e;
+    background: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { color: #dedede; background: #1e1f1e; }
+    .tile { background: rgba(255,255,255,.06); }
+  }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+  .tile {
+    background: rgba(0,0,0,.05);
+    border-radius: 8px;
+    padding: 8px 14px;
+    min-width: 92px;
+    border-top: 2px solid #2e9e44;
+  }
+  .tile .value { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile .label { font-size: 10px; opacity: .6; text-transform: uppercase; letter-spacing: .4px; }
+  .caption { font-size: 10px; opacity: .55; margin-bottom: 6px; }
+  #selRow .tile { border-top-color: #4cc763; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="caption" id="path">—</div>
+<div class="row" id="docRow">
+  <div class="tile"><div class="value" id="dWords">0</div><div class="label">Words</div></div>
+  <div class="tile"><div class="value" id="dChars">0</div><div class="label">Characters</div></div>
+  <div class="tile"><div class="value" id="dLines">0</div><div class="label">Lines</div></div>
+  <div class="tile"><div class="value" id="dTime">—</div><div class="label">Reading time</div></div>
+</div>
+<div class="row hidden" id="selRow">
+  <div class="tile"><div class="value" id="sWords">0</div><div class="label">Sel. words</div></div>
+  <div class="tile"><div class="value" id="sChars">0</div><div class="label">Sel. chars</div></div>
+  <div class="tile"><div class="value" id="sLines">0</div><div class="label">Sel. lines</div></div>
+</div>
+<script>
+  function fmt(n) { return n.toLocaleString(); }
+  window.__noteclarity_receive = function (msg) {
+    if (!msg || msg.type !== "stats") return;
+    document.getElementById("path").textContent = msg.path || "Unsaved document";
+    document.getElementById("dWords").textContent = fmt(msg.doc.words);
+    document.getElementById("dChars").textContent = fmt(msg.doc.chars);
+    document.getElementById("dLines").textContent = fmt(msg.doc.lines);
+    document.getElementById("dTime").textContent =
+      msg.doc.minutes === 0 ? "—" : "~" + msg.doc.minutes + " min";
+    var selRow = document.getElementById("selRow");
+    if (msg.sel) {
+      selRow.classList.remove("hidden");
+      document.getElementById("sWords").textContent = fmt(msg.sel.words);
+      document.getElementById("sChars").textContent = fmt(msg.sel.chars);
+      document.getElementById("sLines").textContent = fmt(msg.sel.lines);
+    } else {
+      selRow.classList.add("hidden");
+    }
+  };
+  window.noteclarity.postMessage({ type: "ready" });
+</script>
+</body>
+</html>

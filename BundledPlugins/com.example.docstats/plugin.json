@@ -1,0 +1,17 @@
+{
+  "id": "com.example.docstats",
+  "name": "Document Statistics",
+  "version": "1.0.0",
+  "apiVersion": "1.0",
+  "author": "NoteClarity Community",
+  "description": "Live word, character and line counts plus a reading-time estimate for the active document and selection.",
+  "main": "main.js",
+  "permissions": ["editor.read", "ui.panel"],
+  "contributes": {
+    "commands": [],
+    "menus": [],
+    "panels": [
+      { "id": "stats", "title": "Statistics", "location": "bottom" }
+    ]
+  }
+}

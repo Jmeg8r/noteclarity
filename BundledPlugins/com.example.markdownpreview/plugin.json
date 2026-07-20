@@ -1,0 +1,17 @@
+{
+  "id": "com.example.markdownpreview",
+  "name": "Markdown Preview",
+  "version": "1.0.0",
+  "apiVersion": "1.0",
+  "author": "NoteClarity Community",
+  "description": "Live-renders the current document as HTML in a right-side panel, updating as you type.",
+  "main": "main.js",
+  "permissions": ["editor.read", "ui.panel"],
+  "contributes": {
+    "commands": [],
+    "menus": [],
+    "panels": [
+      { "id": "preview", "title": "Markdown Preview", "location": "right" }
+    ]
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "com.example.jsonformatter",
+  "name": "JSON Formatter",
+  "version": "1.0.0",
+  "apiVersion": "1.0",
+  "author": "NoteClarity Community",
+  "description": "Pretty-print or minify JSON in the current selection or document.",
+  "main": "main.js",
+  "permissions": ["editor.read", "editor.write", "commands", "menu"],
+  "contributes": {
+    "commands": [
+      { "id": "jsonFormatter.pretty", "title": "Format JSON" },
+      { "id": "jsonFormatter.minify", "title": "Minify JSON" }
+    ],
+    "menus": [
+      { "command": "jsonFormatter.pretty", "location": "plugins" },
+      { "command": "jsonFormatter.minify", "location": "plugins" }
+    ],
+    "panels": []
+  }
+}

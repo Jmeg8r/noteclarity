@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 13px/1.55 -apple-system, "SF Pro Text", sans-serif;
+    margin: 0;
+    padding: 12px 16px 24px;
+    color: #1e1e1e;
+    background: #ffffff;
+    word-wrap: break-word;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { color: #dedede; background: #1e1f1e; }
+  }
+  h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 0.9em 0 0.4em; }
+  h1, h2 { border-bottom: 1px solid rgba(127,127,127,.25); padding-bottom: .2em; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+  pre {
+    background: rgba(127,127,127,.12);
+    padding: 10px 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+  }
+  code { background: rgba(127,127,127,.12); padding: 1px 4px; border-radius: 3px; }
+  pre code { background: none; padding: 0; }
+  blockquote {
+    border-left: 3px solid #2e9e44;
+    margin: 0.5em 0 0.5em 2px;
+    padding: 2px 12px;
+    opacity: .85;
+  }
+  blockquote p { margin: 0.3em 0; }
+  img { max-width: 100%; }
+  a { color: #2e9e44; }
+  hr { border: none; border-top: 1px solid rgba(127,127,127,.3); margin: 1em 0; }
+  ul, ol { padding-left: 1.5em; }
+  .nc-hint { opacity: .6; font-style: italic; margin-bottom: 8px; font-size: 11px; }
+  .nc-raw { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="content"></div>
+<script>
+  // Host → panel delivery point (see README, "Panel message protocol").
+  window.__noteclarity_receive = function (msg) {
+    if (msg && msg.type === "render") {
+      document.getElementById("content").innerHTML = msg.html;
+    }
+  };
+  // Tell the plugin host code we can accept messages now.
+  window.noteclarity.postMessage({ type: "ready" });
+</script>
+</body>
+</html>
