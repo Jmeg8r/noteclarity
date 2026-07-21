@@ -216,33 +216,81 @@ final class AppState: ObservableObject {
         for url in urls { openOne(url) }
     }
 
+    /// Files beyond this size are refused outright — everything past open is
+    /// synchronous full-buffer TextKit work that would beachball the app.
+    static let openSizeLimit = 50_000_000
+
+    /// Serial so multi-file opens finish in request order.
+    private let openQueue = DispatchQueue(label: "nc.file-open", qos: .userInitiated)
+
     private func openOne(_ url: URL) {
         let std = url.standardizedFileURL
         if let existing = documents.first(where: { $0.url?.standardizedFileURL == std }) {
             activate(existing)
             return
         }
-        do {
-            let data = try Data(contentsOf: std)
-            let (raw, encoding) = FileEncoding.decode(data)
-            let eol = LineEnding.detect(in: raw, default: settings.defaultLineEnding)
-            let text = LineEnding.normalizeToLF(raw)
-            let firstLine = text.prefix(300).components(separatedBy: "\n").first ?? ""
-            let language = Language.detect(url: std, firstLine: firstLine)
-            let d = Document(url: std, text: text, encoding: encoding, lineEnding: eol, language: language)
-
-            // Notepad++ behavior: an untouched lone Untitled tab is replaced by the opened file.
-            let replaceable = documents.count == 1 ? documents.first : nil
-            documents.append(d)
-            if let r = replaceable, r.url == nil, !r.isDirty, r.currentText.isEmpty {
-                documents.removeAll { $0.id == r.id }
-            }
-            startWatching(d)
-            activate(d)
-            addRecent(std)
-        } catch {
-            showToast("Could not open \(std.lastPathComponent): \(error.localizedDescription)")
+        // Size gate before reading a byte (P2-02).
+        if let bytes = (try? FileManager.default.attributesOfItem(atPath: std.path))?[.size] as? Int,
+           bytes > Self.openSizeLimit {
+            showToast("\(std.lastPathComponent) is \(bytes / 1_000_000) MB — beyond the \(Self.openSizeLimit / 1_000_000) MB editor limit.")
+            return
         }
+        // Read + decode off-main (P2-02); document creation stays on main.
+        openQueue.async { [weak self] in
+            let result: Result<FileEncoding.DecodedFile, Error>
+            do {
+                result = .success(FileEncoding.decode(try Data(contentsOf: std)))
+            } catch {
+                result = .failure(error)
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .failure(let error):
+                    self.showToast("Could not open \(std.lastPathComponent): \(error.localizedDescription)")
+                case .success(let decoded):
+                    self.finishOpen(std, decoded)
+                }
+            }
+        }
+    }
+
+    private func finishOpen(_ std: URL, _ decoded: FileEncoding.DecodedFile) {
+        // A second open of the same file may have raced the background read.
+        if let existing = documents.first(where: { $0.url?.standardizedFileURL == std }) {
+            activate(existing)
+            return
+        }
+        if decoded.looksBinary {
+            guard confirmBinaryOpen(std) else { return }
+        }
+        if decoded.hadDecodingErrors {
+            showToast("\(std.lastPathComponent) contained bytes invalid in its declared encoding — recovered as \(decoded.encoding.displayName).")
+        }
+        let eol = LineEnding.detect(in: decoded.text, default: settings.defaultLineEnding)
+        let text = LineEnding.normalizeToLF(decoded.text)
+        let firstLine = text.prefix(300).components(separatedBy: "\n").first ?? ""
+        let language = Language.detect(url: std, firstLine: firstLine)
+        let d = Document(url: std, text: text, encoding: decoded.encoding, lineEnding: eol, language: language)
+
+        // Notepad++ behavior: an untouched lone Untitled tab is replaced by the opened file.
+        let replaceable = documents.count == 1 ? documents.first : nil
+        documents.append(d)
+        if let r = replaceable, r.url == nil, !r.isDirty, r.currentText.isEmpty {
+            documents.removeAll { $0.id == r.id }
+        }
+        startWatching(d)
+        activate(d)
+        addRecent(std)
+    }
+
+    private func confirmBinaryOpen(_ url: URL) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "“\(url.lastPathComponent)” looks like a binary file."
+        alert.informativeText = "Editing and saving it as text can corrupt it. Open anyway?"
+        alert.addButton(withTitle: "Open Anyway")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     func activate(_ document: Document) {
@@ -340,8 +388,45 @@ final class AppState: ObservableObject {
     func saveActive() { if let d = activeDocument { save(d) } }
     func saveActiveAs() { if let d = activeDocument { saveAs(d) } }
 
+    private enum UnencodableSaveChoice { case convertToUTF8, saveLossy, cancel }
+
+    private func promptUnencodableSave(for document: Document) -> UnencodableSaveChoice {
+        let alert = NSAlert()
+        alert.messageText = "“\(document.displayName)” contains characters that \(document.encoding.displayName) cannot represent."
+        alert.informativeText = "Convert the document to UTF-8 (keeps every character), or save anyway replacing the unrepresentable ones."
+        alert.addButton(withTitle: "Convert to UTF-8")
+        alert.addButton(withTitle: "Save Lossy")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .convertToUTF8
+        case .alertSecondButtonReturn: return .saveLossy
+        default: return .cancel
+        }
+    }
+
     private func write(_ document: Document, to url: URL) -> Bool {
-        let payload = document.encoding.encode(document.lineEnding.serialize(document.currentText))
+        let serialized = document.lineEnding.serialize(document.currentText)
+        var encoded = document.encoding.encodeExact(serialized)
+        if encoded == nil {
+            // Exact encoding impossible (e.g. emoji into Latin-1). Never
+            // substitute silently (P1-04) — conversion, loss, or cancel is the
+            // user's explicit call.
+            switch promptUnencodableSave(for: document) {
+            case .convertToUTF8:
+                document.encoding = .utf8
+                encoded = FileEncoding.utf8.encodeExact(serialized)
+                showToast("Converted to UTF-8.")
+            case .saveLossy:
+                encoded = document.encoding.encodeLossy(serialized)
+                showToast("Saved with unrepresentable characters replaced.")
+            case .cancel:
+                return false
+            }
+        }
+        guard let payload = encoded else {
+            showToast("Save failed: text could not be encoded as \(document.encoding.displayName).")
+            return false
+        }
         // Bracket the atomic write: it replaces the inode, so the watcher must
         // re-arm afterwards anyway, and tearing it down first guarantees our
         // own save is never reported as an external change.
@@ -403,26 +488,43 @@ final class AppState: ObservableObject {
             scheduleSessionSave()
         case .modified:
             guard let data = try? Data(contentsOf: url) else { return }
-            let (raw, _) = FileEncoding.decode(data)
-            let diskText = LineEnding.normalizeToLF(raw)
-            guard diskText != document.currentText else {
+            let decoded = FileEncoding.decode(data)
+            let diskEOL = LineEnding.detect(in: decoded.text, default: document.lineEnding)
+            let diskText = LineEnding.normalizeToLF(decoded.text)
+            // Content AND metadata both count as changes (P1-05): an external
+            // UTF-8/LF → UTF-16/CRLF conversion with identical visible text
+            // must not be silently reversed by the next save.
+            let textChanged = diskText != document.currentText
+            let metadataChanged = decoded.encoding != document.encoding
+                || diskEOL != document.lineEnding
+            guard textChanged || metadataChanged else {
                 // Byte-identical resave (build tools love these) — no nag.
                 document.fileState = .onDisk
                 document.lastKnownModificationDate = Self.modificationDate(of: url)
                 return
             }
             let reload = (!document.isDirty && settings.autoReloadCleanDocuments)
-                || promptReload(for: document)
+                || promptReload(for: document, textChanged: textChanged)
             if reload {
-                let controller = controller(for: document)
-                let caret = controller.textView.selectedRange().location
-                controller.setTextProgrammatic(diskText)
-                controller.jump(to: min(caret, controller.utf16Length), length: 0)
+                if textChanged {
+                    let controller = controller(for: document)
+                    let caret = controller.textView.selectedRange().location
+                    controller.setTextProgrammatic(diskText)
+                    controller.jump(to: min(caret, controller.utf16Length), length: 0)
+                }
+                // Reloading means matching the on-disk file completely: text,
+                // encoding and line endings move together.
+                document.encoding = decoded.encoding
+                document.lineEnding = diskEOL
                 document.isDirty = false
                 document.fileState = .onDisk
+                if decoded.hadDecodingErrors {
+                    showToast("\(document.displayName) contained bytes invalid in its declared encoding — recovered as \(decoded.encoding.displayName).")
+                }
                 if document.id == activeID { refreshStatus(); refreshSymbols() }
             } else {
-                // "Keep Mine": the buffer now diverges from disk.
+                // "Keep Mine": buffer text AND buffer metadata are retained;
+                // the next save rewrites the file in the buffer's format.
                 document.isDirty = true
             }
             document.lastKnownModificationDate = Self.modificationDate(of: url)
@@ -430,10 +532,12 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func promptReload(for document: Document) -> Bool {
+    private func promptReload(for document: Document, textChanged: Bool) -> Bool {
         activate(document)
         let alert = NSAlert()
-        alert.messageText = "“\(document.displayName)” changed on disk."
+        alert.messageText = textChanged
+            ? "“\(document.displayName)” changed on disk."
+            : "“\(document.displayName)” changed encoding or line endings on disk."
         alert.informativeText = document.isDirty
             ? "You have unsaved changes. Reloading will discard them."
             : "Reload to match the file on disk, or keep the current buffer."
@@ -695,8 +799,13 @@ final class AppState: ObservableObject {
         sessionDebouncer.call { [weak self] in self?.saveSession() }
     }
 
+    /// Debounced saves run every couple of seconds — persistence failures toast
+    /// once per transition into the failing state, not per attempt (P2-07).
+    private var sessionPersistenceFailing = false
+
     func saveSession() {
         try? FileManager.default.createDirectory(at: Self.draftsDirectory, withIntermediateDirectories: true)
+        var failures: [String] = []
         var docs: [SessionDoc] = []
         for d in documents {
             let text = d.currentText
@@ -715,12 +824,16 @@ final class AppState: ObservableObject {
             if d.isDirty {
                 let name = d.id.uuidString + ".txt"
                 let dest = Self.draftsDirectory.appendingPathComponent(name)
-                if (try? text.write(to: dest, atomically: true, encoding: .utf8)) != nil {
+                do {
+                    try text.write(to: dest, atomically: true, encoding: .utf8)
                     entry.draft = name
-                } else if FileManager.default.fileExists(atPath: dest.path) {
-                    // This cycle's write failed; keep referencing the previous
-                    // successful backup rather than orphaning it.
-                    entry.draft = name
+                } catch {
+                    failures.append("draft for \(d.displayName): \(error.localizedDescription)")
+                    if FileManager.default.fileExists(atPath: dest.path) {
+                        // This cycle's write failed; keep referencing the previous
+                        // successful backup rather than orphaning it.
+                        entry.draft = name
+                    }
                 }
             }
             docs.append(entry)
@@ -732,8 +845,12 @@ final class AppState: ObservableObject {
                                  rightPanelVisible: rightPanelVisible,
                                  bottomPanelVisible: bottomPanelVisible)
         var sessionCommitted = false
-        if let data = try? JSONEncoder().encode(state) {
-            sessionCommitted = (try? data.write(to: Self.sessionURL, options: .atomic)) != nil
+        do {
+            let data = try JSONEncoder().encode(state)
+            try data.write(to: Self.sessionURL, options: .atomic)
+            sessionCommitted = true
+        } catch {
+            failures.append("session state: \(error.localizedDescription)")
         }
         // Prune strays LAST, and only once the session state that stops
         // referencing them is durably committed; keyed off dirty membership —
@@ -742,6 +859,15 @@ final class AppState: ObservableObject {
         // delete a backup something on disk still points to.
         if sessionCommitted {
             pruneStrayDrafts(keeping: Set(documents.filter(\.isDirty).map { $0.id.uuidString + ".txt" }))
+        }
+        if failures.isEmpty {
+            sessionPersistenceFailing = false
+        } else {
+            NSLog("[NoteClarity] session persistence failed: %@", failures.joined(separator: "; "))
+            if !sessionPersistenceFailing {
+                sessionPersistenceFailing = true
+                showToast("Could not save session backups — unsaved work is at risk. (\(failures[0]))")
+            }
         }
     }
 
@@ -754,9 +880,20 @@ final class AppState: ObservableObject {
     }
 
     private func restoreSession() {
+        guard FileManager.default.fileExists(atPath: Self.sessionURL.path) else { return }
         guard let data = try? Data(contentsOf: Self.sessionURL),
               let state = try? JSONDecoder().decode(SessionState.self, from: data)
-        else { return }
+        else {
+            // Malformed is not the same as absent (P2-07): quarantine the bytes
+            // for post-mortem instead of silently starting fresh over them.
+            let quarantine = Self.sessionURL.appendingPathExtension("corrupt")
+            try? FileManager.default.removeItem(at: quarantine)
+            try? FileManager.default.moveItem(at: Self.sessionURL, to: quarantine)
+            NSLog("[NoteClarity] session.json was unreadable; moved aside as %@",
+                  quarantine.lastPathComponent)
+            showToast("Previous session was unreadable — moved aside as \(quarantine.lastPathComponent).")
+            return
+        }
 
         for entry in state.docs {
             var document: Document?
@@ -775,13 +912,16 @@ final class AppState: ObservableObject {
             } else if let path = entry.path {
                 let url = URL(fileURLWithPath: path)
                 guard let data = try? Data(contentsOf: url) else { continue }
-                let (raw, encoding) = FileEncoding.decode(data)
-                let eol = LineEnding.detect(in: raw, default: settings.defaultLineEnding)
-                let text = LineEnding.normalizeToLF(raw)
+                let decoded = FileEncoding.decode(data)
+                if decoded.hadDecodingErrors {
+                    showToast("\(url.lastPathComponent) contained bytes invalid in its declared encoding — recovered as \(decoded.encoding.displayName).")
+                }
+                let eol = LineEnding.detect(in: decoded.text, default: settings.defaultLineEnding)
+                let text = LineEnding.normalizeToLF(decoded.text)
                 let firstLine = text.prefix(300).components(separatedBy: "\n").first ?? ""
                 document = Document(url: url,
                                     text: text,
-                                    encoding: encoding,
+                                    encoding: decoded.encoding,
                                     lineEnding: eol,
                                     language: entry.language ?? Language.detect(url: url, firstLine: firstLine),
                                     id: entry.id ?? UUID())
