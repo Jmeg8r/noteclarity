@@ -179,6 +179,35 @@ enum Language: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Semantic version comparison
+
+/// Three-component numeric comparison for release tags. Foundation-only for
+/// the standalone battery.
+enum SemVer {
+    /// Parses "v2.1.0", "2.1", "2.1.0-beta+5" → [2,1,0] (missing components
+    /// are 0; prerelease/build suffixes ignored). Nil if the first component
+    /// isn't numeric.
+    static func parse(_ tag: String) -> [Int]? {
+        var s = Substring(tag)
+        if s.first == "v" || s.first == "V" { s = s.dropFirst() }
+        let core = s.prefix { $0 != "-" && $0 != "+" }
+        let parts = core.split(separator: ".", omittingEmptySubsequences: false)
+        guard let first = parts.first, let major = Int(first) else { return nil }
+        var out = [major]
+        for p in parts.dropFirst().prefix(2) { out.append(Int(p) ?? 0) }
+        while out.count < 3 { out.append(0) }
+        return out
+    }
+
+    /// True only when `remote` is strictly newer than `local`; unparsable
+    /// input is never "newer".
+    static func isNewer(_ remote: String, than local: String) -> Bool {
+        guard let r = parse(remote), let l = parse(local) else { return false }
+        for (a, b) in zip(r, l) where a != b { return a > b }
+        return false
+    }
+}
+
 // MARK: - Debouncer
 
 /// Coalesces bursts of calls (keystrokes) into a single trailing invocation on main.

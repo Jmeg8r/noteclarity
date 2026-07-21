@@ -42,6 +42,7 @@ final class AppSettings: ObservableObject {
         static let autoReloadCleanDocuments = "nc.autoReloadCleanDocuments"
         static let documentWordCompletionEnabled = "nc.documentWordCompletionEnabled"
         static let documentWordAutoPopupEnabled = "nc.documentWordAutoPopupEnabled"
+        static let autoCheckForUpdates = "nc.autoCheckForUpdates"
     }
 
     static let minZoom = 25
@@ -66,6 +67,9 @@ final class AppSettings: ObservableObject {
     /// Notepad++ itself — opinionated behavior in a plaintext-first editor.
     @Published var documentWordCompletionEnabled: Bool { didSet { save() } }
     @Published var documentWordAutoPopupEnabled: Bool { didSet { save() } }
+    /// Weekly anonymous GET against the GitHub releases feed. Opt-out; the
+    /// manual Check for Updates command works regardless.
+    @Published var autoCheckForUpdates: Bool { didSet { save() } }
 
     private init() {
         // Must precede every UserDefaults read; AppState's stored
@@ -86,6 +90,7 @@ final class AppSettings: ObservableObject {
         autoReloadCleanDocuments = d.object(forKey: K.autoReloadCleanDocuments) as? Bool ?? true
         documentWordCompletionEnabled = d.object(forKey: K.documentWordCompletionEnabled) as? Bool ?? false
         documentWordAutoPopupEnabled = d.object(forKey: K.documentWordAutoPopupEnabled) as? Bool ?? false
+        autoCheckForUpdates = d.object(forKey: K.autoCheckForUpdates) as? Bool ?? true
     }
 
     private func save() {
@@ -103,6 +108,7 @@ final class AppSettings: ObservableObject {
         d.set(autoReloadCleanDocuments, forKey: K.autoReloadCleanDocuments)
         d.set(documentWordCompletionEnabled, forKey: K.documentWordCompletionEnabled)
         d.set(documentWordAutoPopupEnabled, forKey: K.documentWordAutoPopupEnabled)
+        d.set(autoCheckForUpdates, forKey: K.autoCheckForUpdates)
     }
 
     func apply() {

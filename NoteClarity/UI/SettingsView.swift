@@ -34,6 +34,11 @@ private struct GeneralPane: View {
             Text("Off uses NoteClarity's Notepad++-inspired green.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Divider()
+            Toggle("Check for updates weekly", isOn: $settings.autoCheckForUpdates)
+            Text("One anonymous request to the GitHub releases feed. NoteClarity ▸ Check for Updates works either way.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .padding(24)
     }
