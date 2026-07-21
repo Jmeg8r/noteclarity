@@ -68,11 +68,11 @@ struct FunctionListView: View {
                         .foregroundStyle(settings.accentColor)
                         .frame(width: 15)
                     Text(symbol.name)
-                        .font(.system(size: 12))
+                        .font(Typography.chrome(size: 12))
                         .lineLimit(1)
                     Spacer()
                     Text("\(symbol.line)")
-                        .font(.system(size: 10))
+                        .font(Typography.chrome(size: 10))
                         .monospacedDigit()
                         .foregroundStyle(.tertiary)
                 }
@@ -115,10 +115,10 @@ struct FilesListView: View {
                             .foregroundStyle(.tertiary)
                         VStack(alignment: .leading, spacing: 1) {
                             Text((path as NSString).lastPathComponent)
-                                .font(.system(size: 12))
+                                .font(Typography.chrome(size: 12))
                                 .lineLimit(1)
                             Text((path as NSString).deletingLastPathComponent)
-                                .font(.system(size: 9))
+                                .font(Typography.chrome(size: 9))
                                 .foregroundStyle(.tertiary)
                                 .lineLimit(1)
                                 .truncationMode(.head)
@@ -145,8 +145,9 @@ private struct FileRow: View {
             Circle()
                 .fill(document.isDirty ? settings.accentColor : Color.secondary.opacity(0.35))
                 .frame(width: 6, height: 6)
+                .accessibilityLabel(document.isDirty ? "Unsaved changes" : "Saved")
             Text(document.displayName)
-                .font(.system(size: 12, weight: app.activeID == document.id ? .semibold : .regular))
+                .font(Typography.chrome(size: 12, weight: app.activeID == document.id ? .semibold : .regular))
                 .lineLimit(1)
             Spacer()
             Button {
@@ -154,10 +155,13 @@ private struct FileRow: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 8, weight: .bold))
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(.tertiary)
             .help("Close")
+            .accessibilityLabel("Close \(document.displayName)")
         }
         .contentShape(Rectangle())
         .onTapGesture { app.activate(document) }

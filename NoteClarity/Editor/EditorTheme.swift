@@ -14,6 +14,9 @@ enum EditorTheme {
     static var background: NSColor { color("EditorBackground", .textBackgroundColor) }
     static var text: NSColor { color("EditorText", .textColor) }
     static var currentLine: NSColor { color("EditorCurrentLine", .quaternaryLabelColor) }
+    static var chromeSurface: NSColor { color("ChromeSurface", .windowBackgroundColor) }
+    static var textMuted: NSColor { color("TextMuted", .secondaryLabelColor) }
+    static var hairline: NSColor { color("Hairline", .separatorColor) }
     static var gutterBackground: NSColor { color("GutterBackground", .windowBackgroundColor) }
     static var gutterText: NSColor { color("GutterText", .secondaryLabelColor) }
     static var accent: NSColor { color("NppGreen", .controlAccentColor) }

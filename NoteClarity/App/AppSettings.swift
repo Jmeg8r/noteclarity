@@ -130,9 +130,11 @@ final class AppSettings: ObservableObject {
     var editorNSFont: NSFont {
         let size = max(6, fontSize * Double(zoomPercent) / 100.0)
         if fontName.isEmpty {
-            return .monospacedSystemFont(ofSize: size, weight: .regular)
+            // Default = the design-system stack: bundled Iosevka Term when
+            // present, otherwise SF Mono (DESIGN.md fallback).
+            return Typography.editorFont(size: size)
         }
-        return NSFont(name: fontName, size: size) ?? .monospacedSystemFont(ofSize: size, weight: .regular)
+        return NSFont(name: fontName, size: size) ?? Typography.editorFont(size: size)
     }
 
     /// Installed font families whose regular face is fixed-pitch, for the Settings picker.

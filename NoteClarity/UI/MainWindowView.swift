@@ -77,7 +77,7 @@ struct PluginPanelArea: View {
                     .labelsHidden()
                 } else {
                     Text(selected?.title ?? "Panel")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(Typography.chrome(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -87,10 +87,13 @@ struct PluginPanelArea: View {
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .bold))
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .help("Hide panel")
+                .accessibilityLabel("Hide panel")
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -102,7 +105,7 @@ struct PluginPanelArea: View {
                 Spacer()
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color("ChromeSurface"))
     }
 }
 
@@ -161,19 +164,21 @@ struct MainWindowView: View {
     }
 
     private var toastStack: some View {
+        // DESIGN.md motion rule: nothing moves — toasts fade only. Chrome is
+        // opaque ChromeSurface with a hairline border; no materials, no pills.
         VStack(alignment: .trailing, spacing: 8) {
             ForEach(app.toasts) { toast in
                 Text(toast.text)
-                    .font(.system(size: 12))
+                    .font(Typography.chrome(size: 12))
                     .lineLimit(4)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                    .background(Color("ChromeSurface"))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .strokeBorder(Color("NppGreen").opacity(0.55), lineWidth: 1)
+                        Rectangle()
+                            .strokeBorder(Color("Hairline"), lineWidth: 1)
                     )
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .transition(.opacity)
             }
         }
         .padding(.trailing, 16)
@@ -190,6 +195,7 @@ struct MainWindowView: View {
                 Image(systemName: "sidebar.left")
             }
             .help("Toggle Sidebar")
+            .accessibilityLabel("Toggle Sidebar")
         }
         ToolbarItemGroup {
             Button {
@@ -198,12 +204,14 @@ struct MainWindowView: View {
                 Image(systemName: "magnifyingglass")
             }
             .help("Find (⌘F)")
+            .accessibilityLabel("Find")
 
             Toggle(isOn: $settings.wordWrap) {
                 Image(systemName: "text.wrap")
             }
             .toggleStyle(.button)
             .help("Word Wrap")
+            .accessibilityLabel("Word Wrap")
 
             Menu {
                 Picker("Appearance", selection: $settings.appearance) {
@@ -217,6 +225,7 @@ struct MainWindowView: View {
                 Image(systemName: "circle.lefthalf.filled")
             }
             .help("Appearance")
+            .accessibilityLabel("Appearance")
 
             Button {
                 app.bottomPanelVisible.toggle()
@@ -225,6 +234,7 @@ struct MainWindowView: View {
             }
             .disabled(plugins.panels(at: .bottom).isEmpty)
             .help("Toggle Bottom Panel")
+            .accessibilityLabel("Toggle Bottom Panel")
 
             Button {
                 app.rightPanelVisible.toggle()
@@ -233,6 +243,7 @@ struct MainWindowView: View {
             }
             .disabled(plugins.panels(at: .right).isEmpty)
             .help("Toggle Right Panel")
+            .accessibilityLabel("Toggle Right Panel")
         }
     }
 

@@ -58,6 +58,7 @@ struct FindBarView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Close (Esc)")
+                .accessibilityLabel("Close Find Bar")
             }
             HStack(spacing: 8) {
                 Image(systemName: "arrow.2.squarepath")
@@ -82,7 +83,7 @@ struct FindBarView: View {
         .controlSize(.small)
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color("ChromeSurface"))
         .onAppear { focusInitialField() }
         .onChange(of: app.findFocusToken) { _, _ in focusInitialField() }
         .onExitCommand { app.findBarVisible = false }
@@ -113,5 +114,7 @@ struct FindBarView: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(help)
+        .accessibilityAddTraits(isOn.wrappedValue ? [.isSelected] : [])
     }
 }

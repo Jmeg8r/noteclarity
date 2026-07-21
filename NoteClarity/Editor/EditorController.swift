@@ -58,7 +58,8 @@ final class EditorController: NSObject {
         tv.smartInsertDeleteEnabled = false
         tv.drawsBackground = true
         tv.backgroundColor = EditorTheme.background
-        tv.textContainerInset = NSSize(width: 0, height: 6)
+        // DESIGN.md editor insets: 16pt horizontal, 6–8pt vertical.
+        tv.textContainerInset = NSSize(width: 16, height: 6)
         tv.isVerticallyResizable = true
         tv.minSize = NSSize(width: 0, height: 0)
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
@@ -154,6 +155,12 @@ final class EditorController: NSObject {
         let charWidth = ("0" as NSString).size(withAttributes: [.font: font]).width
         paragraph.defaultTabInterval = charWidth * CGFloat(max(1, settings.tabWidth))
         paragraph.tabStops = []
+        // DESIGN.md line height ~1.7em. The multiplier scales the font's
+        // natural line height, so normalize against it to land on 1.7 × size.
+        let naturalLineHeight = NSLayoutManager().defaultLineHeight(for: font)
+        if naturalLineHeight > 0 {
+            paragraph.lineHeightMultiple = max(1, (1.7 * font.pointSize) / naturalLineHeight)
+        }
         textView.defaultParagraphStyle = paragraph
         textView.typingAttributes = [
             .font: font,
@@ -176,6 +183,7 @@ final class EditorController: NSObject {
         textView.autocompleteEnabled = settings.documentWordCompletionEnabled
         textView.autoPopupEnabled = settings.documentWordAutoPopupEnabled
         scheduleWordCacheRebuild()   // covers first open and toggling the setting on
+        highlightNow()   // re-derives comment italics from the (possibly new) font
     }
 
     func setWordWrap(_ wrap: Bool) {
@@ -304,12 +312,20 @@ final class EditorController: NSObject {
     private func applySpans(_ spans: [HighlightSpan]) {
         guard let storage = textView.textStorage else { return }
         let full = NSRange(location: 0, length: storage.length)
+        let baseFont = textView.font ?? .monospacedSystemFont(ofSize: 13, weight: .regular)
+        // DESIGN.md: comments render in real italics. Falls back to the base
+        // face when the family has no italic variant (convert returns input).
+        let italicFont = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
         storage.beginEditing()
         storage.addAttribute(.foregroundColor, value: EditorTheme.text, range: full)
+        storage.addAttribute(.font, value: baseFont, range: full)
         for span in spans where NSMaxRange(span.range) <= storage.length {
             storage.addAttribute(.foregroundColor,
                                  value: EditorTheme.tokenColor(span.token),
                                  range: span.range)
+            if span.token == .comment {
+                storage.addAttribute(.font, value: italicFont, range: span.range)
+            }
         }
         storage.endEditing()
     }
