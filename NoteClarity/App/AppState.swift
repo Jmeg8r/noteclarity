@@ -142,6 +142,12 @@ final class AppState: ObservableObject {
         if let override = ProcessInfo.processInfo.environment["NOTECLARITY_SUPPORT_DIR"],
            !override.isEmpty {
             let dir = URL(fileURLWithPath: override, isDirectory: true)
+            // Deterministic test runs: FRESH wipes stale state from earlier
+            // runs. Only honored together with the override — it can never
+            // touch the real profile.
+            if ProcessInfo.processInfo.environment["NOTECLARITY_FRESH_SUPPORT"] == "1" {
+                try? FileManager.default.removeItem(at: dir)
+            }
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             return dir
         }

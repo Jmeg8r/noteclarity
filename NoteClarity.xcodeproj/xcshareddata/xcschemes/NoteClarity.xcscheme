@@ -34,6 +34,11 @@
             isEnabled = "YES">
          </EnvironmentVariable>
          <EnvironmentVariable
+            key = "NOTECLARITY_FRESH_SUPPORT"
+            value = "1"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
             key = "NOTECLARITY_UPDATE_API"
             value = "http://127.0.0.1:1/unavailable"
             isEnabled = "YES">
