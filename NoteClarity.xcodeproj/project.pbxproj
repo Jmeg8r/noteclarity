@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		4EC0DE0000000000000000AB /* BundledPlugins in Resources */ = {isa = PBXBuildFile; fileRef = 4EC0DE0000000000000000AC /* BundledPlugins */; };
+		4EC0DE0000000000000000D1 /* Fonts in Resources */ = {isa = PBXBuildFile; fileRef = 4EC0DE0000000000000000D0 /* Fonts */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -23,6 +24,7 @@
 /* Begin PBXFileReference section */
 		4EC0DE0000000000000000A4 /* NoteClarity.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NoteClarity.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4EC0DE0000000000000000AC /* BundledPlugins */ = {isa = PBXFileReference; lastKnownFileType = folder; path = BundledPlugins; sourceTree = "<group>"; };
+		4EC0DE0000000000000000D0 /* Fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Fonts; sourceTree = "<group>"; };
 		4EC0DE0000000000000000B5 /* noteclarity.d.ts */ = {isa = PBXFileReference; lastKnownFileType = text; path = noteclarity.d.ts; sourceTree = "<group>"; };
 		4EC0DE0000000000000000C3 /* NoteClarityTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NoteClarityTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -48,8 +50,6 @@
 		};
 		4EC0DE0000000000000000C1 /* NoteClarityTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = NoteClarityTests;
 			sourceTree = "<group>";
 		};
@@ -77,7 +77,9 @@
 			isa = PBXGroup;
 			children = (
 				4EC0DE0000000000000000A1 /* NoteClarity */,
+				4EC0DE0000000000000000C1 /* NoteClarityTests */,
 				4EC0DE0000000000000000AC /* BundledPlugins */,
+				4EC0DE0000000000000000D0 /* Fonts */,
 				4EC0DE0000000000000000B6 /* Plugins */,
 				4EC0DE0000000000000000A7 /* Products */,
 			);
@@ -193,6 +195,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				4EC0DE0000000000000000AB /* BundledPlugins in Resources */,
+				4EC0DE0000000000000000D1 /* Fonts in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -401,8 +404,6 @@
 			};
 			name = Release;
 		};
-/* End XCBuildConfiguration section */
-
 		4EC0DE0000000000000000C8 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -439,6 +440,7 @@
 			};
 			name = Release;
 		};
+/* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
 		4EC0DE0000000000000000AD /* Build configuration list for PBXProject "NoteClarity" */ = {

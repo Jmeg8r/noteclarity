@@ -44,7 +44,9 @@ final class LineNumberRulerView: NSRulerView {
     override func drawHashMarksAndLabels(in rect: NSRect) {
         EditorTheme.gutterBackground.setFill()
         bounds.fill()
-        EditorTheme.gutterText.withAlphaComponent(0.25).setFill()
+        // DESIGN.md: hairline right edge — the shared Hairline token, not an
+        // ad-hoc alpha of the text color.
+        EditorTheme.hairline.setFill()
         NSRect(x: bounds.maxX - 1, y: rect.minY, width: 1, height: rect.height).fill()
 
         guard let tv = codeView, let lm = tv.textLayoutManager else { return }
@@ -56,9 +58,11 @@ final class LineNumberRulerView: NSRulerView {
         let normalAttrs: [NSAttributedString.Key: Any] = [
             .font: font, .foregroundColor: EditorTheme.gutterText,
         ]
+        // DESIGN.md: the current line's number renders in EditorText (green is
+        // reserved for caret/active-tab/saved/focus signals, not the gutter).
         let currentAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(ofSize: size, weight: .semibold),
-            .foregroundColor: EditorTheme.accent,
+            .foregroundColor: EditorTheme.text,
         ]
 
         let startLocation = lm.textViewportLayoutController.viewportRange?.location

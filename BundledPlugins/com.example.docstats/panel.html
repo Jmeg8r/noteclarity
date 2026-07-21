@@ -7,30 +7,36 @@
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
 <style>
-  :root { color-scheme: light dark; }
-  body {
-    font: 12px -apple-system, "SF Pro Text", sans-serif;
-    margin: 0;
-    padding: 10px 14px;
-    color: #1e1e1e;
-    background: #ffffff;
+  /* Ink & Phosphor tokens (DESIGN.md): flat hairline-bordered tiles on the
+     chrome surface — no pills, no rounded cards, green never decorative. */
+  :root {
+    color-scheme: light dark;
+    --bg: #FAFBFA; --text: #16181A; --muted: #6E766F;
+    --chrome: #F1F3F1; --hairline: #D8DCD6;
   }
   @media (prefers-color-scheme: dark) {
-    body { color: #dedede; background: #1e1f1e; }
-    .tile { background: rgba(255,255,255,.06); }
+    :root {
+      --bg: #161A16; --text: #E4E6E3; --muted: #7C8A7E;
+      --chrome: #1E221E; --hairline: #353A35;
+    }
+  }
+  body {
+    font: 12px "Iosevka Aile", -apple-system, "SF Pro Text", sans-serif;
+    margin: 0;
+    padding: 10px 14px;
+    color: var(--text);
+    background: var(--bg);
   }
   .row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
   .tile {
-    background: rgba(0,0,0,.05);
-    border-radius: 8px;
+    background: var(--chrome);
+    border: 1px solid var(--hairline);
     padding: 8px 14px;
     min-width: 92px;
-    border-top: 2px solid #2e9e44;
   }
   .tile .value { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .tile .label { font-size: 10px; opacity: .6; text-transform: uppercase; letter-spacing: .4px; }
-  .caption { font-size: 10px; opacity: .55; margin-bottom: 6px; }
-  #selRow .tile { border-top-color: #4cc763; }
+  .tile .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .caption { font-size: 10px; color: var(--muted); margin-bottom: 6px; }
   .hidden { display: none; }
 </style>
 </head>

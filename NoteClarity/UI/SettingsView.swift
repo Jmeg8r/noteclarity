@@ -50,7 +50,7 @@ private struct EditorPane: View {
     var body: some View {
         Form {
             Picker("Font:", selection: $settings.fontName) {
-                Text("System Mono (SF Mono)").tag("")
+                Text("Default (Iosevka Term / SF Mono)").tag("")
                 Divider()
                 ForEach(AppSettings.monospacedFamilies, id: \.self) { family in
                     Text(family).tag(family)

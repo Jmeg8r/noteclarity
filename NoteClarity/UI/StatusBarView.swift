@@ -28,16 +28,18 @@ struct StatusBarView: View {
                 zoomMenu
             }
         }
-        .font(.system(size: 11))
+        .font(Typography.chrome(size: 11))
         .monospacedDigit()
         .padding(.horizontal, 10)
-        .frame(height: 25)
-        .background(.bar)
+        // DESIGN.md: 22–24pt, opaque ChromeSurface — no vibrancy in
+        // density-critical chrome.
+        .frame(height: 24)
+        .background(Color("ChromeSurface"))
     }
 
     private var divider: some View {
         Rectangle()
-            .fill(Color.secondary.opacity(0.25))
+            .fill(Color("Hairline"))
             .frame(width: 1, height: 13)
             .padding(.horizontal, 8)
     }
