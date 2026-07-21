@@ -36,8 +36,12 @@ VERSION=$(xcodebuild -showBuildSettings -project NoteClarity.xcodeproj -scheme N
     -configuration Release 2>/dev/null | awk '/ MARKETING_VERSION /{print $3}')
 [[ -n "$VERSION" ]] || { echo "ERROR: could not read MARKETING_VERSION."; exit 1; }
 echo "Version: $VERSION"
-git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null \
-    && { echo "ERROR: tag v$VERSION already exists — bump MARKETING_VERSION first."; exit 1; }
+# Check the REMOTE for the tag too — `git fetch origin main` does not bring
+# tags down, so a local-only check can miss an already-published release.
+if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null \
+    || [[ -n "$(git ls-remote --tags origin "refs/tags/v$VERSION")" ]]; then
+    echo "ERROR: tag v$VERSION already exists — bump MARKETING_VERSION first."; exit 1
+fi
 
 BUILD=build
 APP=NoteClarity.app
@@ -91,8 +95,9 @@ xcrun stapler validate "$DMG"
 spctl -a -t open --context context:primary-signature -vv "$DMG"
 
 # WHAT: published checksum. WHY: lets anyone verify the download they got is
-# the artifact this run produced.
-shasum -a 256 "$DMG" | tee "$DMG.sha256"
+# the artifact this run produced. Basename-relative so a downloader can run
+# `shasum -a 256 -c` next to the two assets without recreating build/.
+(cd "$(dirname "$DMG")" && shasum -a 256 "$(basename "$DMG")" | tee "$(basename "$DMG").sha256")
 echo "DMG ready: $DMG"
 
 if $PUBLISH; then
