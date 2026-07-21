@@ -22,10 +22,22 @@ security find-identity -v -p codesigning | grep -q "Developer ID Application" \
 xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 \
     || { echo "ERROR: notary profile '$NOTARY_PROFILE' missing — run the store-credentials command in this script's header."; exit 1; }
 
+# WHAT: source-state gate. WHY: a signed, notarized build from a dirty tree or
+# an unpushed commit is otherwise indistinguishable from a real release.
+[[ -z "$(git status --porcelain)" ]] \
+    || { echo "ERROR: working tree is not clean — commit or stash before releasing."; git status --short; exit 1; }
+git fetch origin main --quiet
+HEAD_SHA=$(git rev-parse HEAD)
+git merge-base --is-ancestor "$HEAD_SHA" origin/main \
+    || { echo "ERROR: HEAD ($HEAD_SHA) is not on origin/main — releases build only published main history."; exit 1; }
+echo "Source: clean tree at $HEAD_SHA (on origin/main)"
+
 VERSION=$(xcodebuild -showBuildSettings -project NoteClarity.xcodeproj -scheme NoteClarity \
     -configuration Release 2>/dev/null | awk '/ MARKETING_VERSION /{print $3}')
 [[ -n "$VERSION" ]] || { echo "ERROR: could not read MARKETING_VERSION."; exit 1; }
 echo "Version: $VERSION"
+git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null \
+    && { echo "ERROR: tag v$VERSION already exists — bump MARKETING_VERSION first."; exit 1; }
 
 BUILD=build
 APP=NoteClarity.app
@@ -77,11 +89,15 @@ xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$DMG"
 xcrun stapler validate "$DMG"
 spctl -a -t open --context context:primary-signature -vv "$DMG"
+
+# WHAT: published checksum. WHY: lets anyone verify the download they got is
+# the artifact this run produced.
+shasum -a 256 "$DMG" | tee "$DMG.sha256"
 echo "DMG ready: $DMG"
 
 if $PUBLISH; then
     echo "== Publish GitHub release v$VERSION =="
-    gh release create "v$VERSION" "$DMG" --repo Jmeg8r/noteclarity \
+    gh release create "v$VERSION" "$DMG" "$DMG.sha256" --repo Jmeg8r/noteclarity \
         --title "NoteClarity $VERSION" --generate-notes
 else
     echo "Dry run complete. Re-run with --publish to create the GitHub release."
