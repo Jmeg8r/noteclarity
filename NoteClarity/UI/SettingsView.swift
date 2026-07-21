@@ -67,6 +67,13 @@ private struct EditorPane: View {
             .pickerStyle(.segmented)
             .frame(maxWidth: 280)
             Toggle("Word wrap", isOn: $settings.wordWrap)
+            Divider()
+            Toggle("Complete words from the document (⌥Esc)",
+                   isOn: $settings.documentWordCompletionEnabled)
+            Toggle("Show completions automatically while typing",
+                   isOn: $settings.documentWordAutoPopupEnabled)
+                .disabled(!settings.documentWordCompletionEnabled)
+                .padding(.leading, 18)
         }
         .padding(24)
     }
