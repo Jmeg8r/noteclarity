@@ -2,6 +2,10 @@ import SwiftUI
 import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        UpdateChecker.shared.checkAutomaticallyIfDue()
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         AppState.shared.handleTermination()
     }
@@ -54,6 +58,10 @@ struct AppCommands: Commands {
     @ObservedObject var plugins: PluginManager
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") { UpdateChecker.shared.checkManually() }
+        }
+
         CommandGroup(replacing: .newItem) {
             Button("New Tab") { app.newDocument() }
                 .keyboardShortcut("n", modifiers: .command)
