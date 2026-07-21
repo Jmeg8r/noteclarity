@@ -4,16 +4,22 @@ import Combine
 
 // MARK: - Document
 
+enum DocumentFileState: Equatable { case onDisk, missing }
+
 final class Document: ObservableObject, Identifiable {
     /// Stable across relaunches (persisted in session.json) so draft-backup
     /// filenames survive the restore boundary.
     let id: UUID
     @Published var url: URL?
     @Published var isDirty = false
+    @Published var fileState: DocumentFileState = .onDisk
     @Published var encoding: FileEncoding
     @Published var lineEnding: LineEnding
     @Published var language: Language
     var languageIsManual = false
+    var fileWatcher: FileWatcher?
+    var lastKnownModificationDate: Date?
+    var isHandlingExternalChange = false
 
     /// Per-document undo history, kept across tab switches.
     let undoManager = UndoManager()
@@ -94,6 +100,7 @@ final class AppState: ObservableObject {
     private let changedEventDebouncer = Debouncer(0.25)
     private let selectionEventDebouncer = Debouncer(0.12)
     private let sessionDebouncer = Debouncer(2.0)
+    private let activeRecheckDebouncer = Debouncer(0.25)
     private var settingsSink: AnyCancellable?
 
     var activeDocument: Document? { documents.first { $0.id == activeID } }
@@ -114,6 +121,12 @@ final class AppState: ObservableObject {
         plugins.loadAll()
         restoreSession()
         if documents.isEmpty { newDocument() }
+        // Backstop for the kqueue watchers: files changed while the app was
+        // in the background are caught the moment it becomes active again.
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            self?.activeRecheckDebouncer.call { self?.recheckAllDocumentsForExternalChanges() }
+        }
     }
 
     // MARK: Support directories
@@ -219,6 +232,7 @@ final class AppState: ObservableObject {
             if let r = replaceable, r.url == nil, !r.isDirty, r.currentText.isEmpty {
                 documents.removeAll { $0.id == r.id }
             }
+            startWatching(d)
             activate(d)
             addRecent(std)
         } catch {
@@ -281,6 +295,7 @@ final class AppState: ObservableObject {
 
     private func forceClose(_ document: Document) {
         guard let idx = documents.firstIndex(where: { $0.id == document.id }) else { return }
+        document.fileWatcher = nil   // deterministic fd cleanup on rapid open/close
         documents.remove(at: idx)
         if activeID == document.id {
             let next = idx < documents.count ? documents[idx] : documents.last
@@ -306,6 +321,7 @@ final class AppState: ObservableObject {
         guard panel.runModal() == .OK, let url = panel.url else { return false }
         guard write(document, to: url) else { return false }
         document.url = url
+        startWatching(document)   // re-point (or first-arm) the watcher at the new path
         if !document.languageIsManual {
             let detected = Language.detect(url: url, firstLine: "")
             if detected != .plaintext, detected != document.language {
@@ -321,16 +337,120 @@ final class AppState: ObservableObject {
 
     private func write(_ document: Document, to url: URL) -> Bool {
         let payload = document.encoding.encode(document.lineEnding.serialize(document.currentText))
+        // Bracket the atomic write: it replaces the inode, so the watcher must
+        // re-arm afterwards anyway, and tearing it down first guarantees our
+        // own save is never reported as an external change.
+        document.fileWatcher?.pauseForOwnWrite()
         do {
             try payload.write(to: url, options: .atomic)
         } catch {
+            document.fileWatcher?.resumeAfterOwnWrite()
             showToast("Save failed: \(error.localizedDescription)")
             return false
         }
         document.isDirty = false
+        document.fileState = .onDisk
+        document.lastKnownModificationDate = Self.modificationDate(of: url)
+        document.fileWatcher?.resumeAfterOwnWrite()
         emitDocumentEvent(.documentSaved, document)
         scheduleSessionSave()
         return true
+    }
+
+    private static func modificationDate(of url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+    }
+
+    // MARK: External file changes
+
+    private func startWatching(_ document: Document) {
+        guard let url = document.url else { return }
+        let watcher = FileWatcher(url: url)
+        watcher.onChange = { [weak self, weak document] kind in
+            guard let self, let document else { return }
+            self.handleExternalChange(document, kind)
+        }
+        document.fileWatcher = watcher
+        document.lastKnownModificationDate = Self.modificationDate(of: url)
+        // A restored document's file may have vanished while the app was
+        // closed — surface that now instead of waiting for an event.
+        if !FileManager.default.fileExists(atPath: url.path) {
+            document.fileState = .missing
+            document.isDirty = true
+        }
+    }
+
+    private func handleExternalChange(_ document: Document, _ kind: FileWatcher.ChangeKind) {
+        guard !document.isHandlingExternalChange else { return }   // kqueue vs didBecomeActive double-fire
+        document.isHandlingExternalChange = true
+        defer { document.isHandlingExternalChange = false }
+        guard let url = document.url else { return }
+
+        switch kind {
+        case .missing:
+            document.fileState = .missing
+            // No on-disk copy to be clean relative to; dirty also makes the
+            // draft-backup system preserve the buffer.
+            document.isDirty = true
+            showToast("\(document.displayName) was deleted or moved.")
+            scheduleSessionSave()
+        case .modified:
+            guard let data = try? Data(contentsOf: url) else { return }
+            let (raw, _) = FileEncoding.decode(data)
+            let diskText = LineEnding.normalizeToLF(raw)
+            guard diskText != document.currentText else {
+                // Byte-identical resave (build tools love these) — no nag.
+                document.fileState = .onDisk
+                document.lastKnownModificationDate = Self.modificationDate(of: url)
+                return
+            }
+            let reload = (!document.isDirty && settings.autoReloadCleanDocuments)
+                || promptReload(for: document)
+            if reload {
+                let controller = controller(for: document)
+                let caret = controller.textView.selectedRange().location
+                controller.setTextProgrammatic(diskText)
+                controller.jump(to: min(caret, controller.utf16Length), length: 0)
+                document.isDirty = false
+                document.fileState = .onDisk
+                if document.id == activeID { refreshStatus(); refreshSymbols() }
+            } else {
+                // "Keep Mine": the buffer now diverges from disk.
+                document.isDirty = true
+            }
+            document.lastKnownModificationDate = Self.modificationDate(of: url)
+            scheduleSessionSave()
+        }
+    }
+
+    private func promptReload(for document: Document) -> Bool {
+        activate(document)
+        let alert = NSAlert()
+        alert.messageText = "“\(document.displayName)” changed on disk."
+        alert.informativeText = document.isDirty
+            ? "You have unsaved changes. Reloading will discard them."
+            : "Reload to match the file on disk, or keep the current buffer."
+        alert.addButton(withTitle: "Reload")
+        alert.addButton(withTitle: "Keep Mine")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    func reloadActiveFromDisk() {
+        guard let d = activeDocument, d.url != nil else { return }
+        handleExternalChange(d, .modified)
+    }
+
+    private func recheckAllDocumentsForExternalChanges() {
+        for d in documents {
+            guard let url = d.url else { continue }
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                if d.fileState != .missing { handleExternalChange(d, .missing) }
+                continue
+            }
+            if d.fileState == .missing || Self.modificationDate(of: url) != d.lastKnownModificationDate {
+                handleExternalChange(d, .modified)
+            }
+        }
     }
 
     // MARK: Edit plumbing
@@ -642,6 +762,7 @@ final class AppState: ObservableObject {
                 if entry.language != nil { document.languageIsManual = true }
                 document.pendingCursor = entry.cursor
                 documents.append(document)
+                if document.url != nil { startWatching(document) }
             }
         }
 

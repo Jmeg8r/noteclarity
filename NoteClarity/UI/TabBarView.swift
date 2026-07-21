@@ -43,14 +43,21 @@ private struct TabItemView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Circle()
-                .fill(document.isDirty ? settings.accentColor : Color.clear)
-                .overlay(
-                    Circle().strokeBorder(Color.secondary.opacity(document.isDirty ? 0 : 0.4),
-                                          lineWidth: 1)
-                )
-                .frame(width: 7, height: 7)
-                .help(document.isDirty ? "Unsaved changes" : "No unsaved changes")
+            if document.fileState == .missing {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.yellow)
+                    .help("File was deleted or moved; the buffer is preserved")
+            } else {
+                Circle()
+                    .fill(document.isDirty ? settings.accentColor : Color.clear)
+                    .overlay(
+                        Circle().strokeBorder(Color.secondary.opacity(document.isDirty ? 0 : 0.4),
+                                              lineWidth: 1)
+                    )
+                    .frame(width: 7, height: 7)
+                    .help(document.isDirty ? "Unsaved changes" : "No unsaved changes")
+            }
 
             Text(document.displayName)
                 .font(.system(size: 12, weight: isActive ? .medium : .regular))

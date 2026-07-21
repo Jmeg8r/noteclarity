@@ -90,6 +90,12 @@ private struct FilesPane: View {
             Text("Defaults apply to new documents; existing files keep their detected values.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Divider()
+            Toggle("Automatically reload documents with no unsaved changes when their file changes on disk",
+                   isOn: $settings.autoReloadCleanDocuments)
+            Text("Documents with unsaved changes always ask before reloading.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .padding(24)
     }

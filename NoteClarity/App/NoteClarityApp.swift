@@ -79,6 +79,8 @@ struct AppCommands: Commands {
                 .keyboardShortcut("s", modifiers: .command)
             Button("Save As…") { app.saveActiveAs() }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
+            Button("Reload from Disk") { app.reloadActiveFromDisk() }
+                .disabled(app.activeDocument?.url == nil)
             Divider()
             Button("Close Tab") { app.closeActive() }
                 .keyboardShortcut("w", modifiers: .command)
