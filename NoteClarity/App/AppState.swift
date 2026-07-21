@@ -5,7 +5,9 @@ import Combine
 // MARK: - Document
 
 final class Document: ObservableObject, Identifiable {
-    let id = UUID()
+    /// Stable across relaunches (persisted in session.json) so draft-backup
+    /// filenames survive the restore boundary.
+    let id: UUID
     @Published var url: URL?
     @Published var isDirty = false
     @Published var encoding: FileEncoding
@@ -28,7 +30,9 @@ final class Document: ObservableObject, Identifiable {
 
     var currentText: String { controller?.text ?? pendingText }
 
-    init(url: URL?, text: String, encoding: FileEncoding, lineEnding: LineEnding, language: Language) {
+    init(url: URL?, text: String, encoding: FileEncoding, lineEnding: LineEnding, language: Language,
+         id: UUID = UUID()) {
+        self.id = id
         self.url = url
         self.pendingText = text
         self.encoding = encoding
@@ -115,6 +119,15 @@ final class AppState: ObservableObject {
     // MARK: Support directories
 
     static var supportDirectory: URL = {
+        // Testing seam: headless verification runs point this at a scratch
+        // directory so they never collide with the real session (a HOME
+        // override does not redirect applicationSupportDirectory).
+        if let override = ProcessInfo.processInfo.environment["NOTECLARITY_SUPPORT_DIR"],
+           !override.isEmpty {
+            let dir = URL(fileURLWithPath: override, isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = base.appendingPathComponent("NoteClarity", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -508,6 +521,7 @@ final class AppState: ObservableObject {
     // MARK: Session persistence
 
     private struct SessionDoc: Codable {
+        var id: UUID?
         var path: String?
         var draft: String?
         var cursor: Int
@@ -530,14 +544,14 @@ final class AppState: ObservableObject {
     }
 
     func saveSession() {
-        try? FileManager.default.removeItem(at: Self.draftsDirectory)
         try? FileManager.default.createDirectory(at: Self.draftsDirectory, withIntermediateDirectories: true)
         var docs: [SessionDoc] = []
         for d in documents {
             let text = d.currentText
             // A discarded (clean) untitled buffer with content was explicitly dropped.
             if d.url == nil && !d.isDirty && !text.isEmpty { continue }
-            var entry = SessionDoc(path: d.url?.path,
+            var entry = SessionDoc(id: d.id,
+                                   path: d.url?.path,
                                    draft: nil,
                                    cursor: d.controller?.caretOffset ?? d.pendingCursor,
                                    encoding: d.encoding,
@@ -546,13 +560,21 @@ final class AppState: ObservableObject {
                                    dirty: d.isDirty)
             if d.isDirty {
                 let name = d.id.uuidString + ".txt"
-                if (try? text.write(to: Self.draftsDirectory.appendingPathComponent(name),
-                                    atomically: true, encoding: .utf8)) != nil {
+                let dest = Self.draftsDirectory.appendingPathComponent(name)
+                if (try? text.write(to: dest, atomically: true, encoding: .utf8)) != nil {
+                    entry.draft = name
+                } else if FileManager.default.fileExists(atPath: dest.path) {
+                    // This cycle's write failed; keep referencing the previous
+                    // successful backup rather than orphaning it.
                     entry.draft = name
                 }
             }
             docs.append(entry)
         }
+        // Prune strays only after every live draft is rewritten, keyed off dirty
+        // membership — not off which writes succeeded this cycle — so a transient
+        // write failure never deletes a document's last-known-good backup.
+        pruneStrayDrafts(keeping: Set(documents.filter(\.isDirty).map { $0.id.uuidString + ".txt" }))
         let active = documents.firstIndex { $0.id == activeID } ?? 0
         let state = SessionState(docs: docs,
                                  activeIndex: active,
@@ -561,6 +583,14 @@ final class AppState: ObservableObject {
                                  bottomPanelVisible: bottomPanelVisible)
         if let data = try? JSONEncoder().encode(state) {
             try? data.write(to: Self.sessionURL, options: .atomic)
+        }
+    }
+
+    private func pruneStrayDrafts(keeping expected: Set<String>) {
+        guard let items = try? FileManager.default.contentsOfDirectory(at: Self.draftsDirectory,
+                                                                       includingPropertiesForKeys: nil) else { return }
+        for item in items where !expected.contains(item.lastPathComponent) {
+            try? FileManager.default.removeItem(at: item)
         }
     }
 
@@ -580,7 +610,8 @@ final class AppState: ObservableObject {
                                     text: LineEnding.normalizeToLF(draft),
                                     encoding: entry.encoding,
                                     lineEnding: entry.eol,
-                                    language: entry.language ?? Language.detect(url: url, firstLine: draft.prefix(300).components(separatedBy: "\n").first ?? ""))
+                                    language: entry.language ?? Language.detect(url: url, firstLine: draft.prefix(300).components(separatedBy: "\n").first ?? ""),
+                                    id: entry.id ?? UUID())
                 document?.isDirty = true
             } else if let path = entry.path {
                 let url = URL(fileURLWithPath: path)
@@ -593,12 +624,14 @@ final class AppState: ObservableObject {
                                     text: text,
                                     encoding: encoding,
                                     lineEnding: eol,
-                                    language: entry.language ?? Language.detect(url: url, firstLine: firstLine))
+                                    language: entry.language ?? Language.detect(url: url, firstLine: firstLine),
+                                    id: entry.id ?? UUID())
             } else {
                 document = Document(url: nil, text: "",
                                     encoding: entry.encoding,
                                     lineEnding: entry.eol,
-                                    language: entry.language ?? .plaintext)
+                                    language: entry.language ?? .plaintext,
+                                    id: entry.id ?? UUID())
             }
             if let document {
                 if entry.language != nil { document.languageIsManual = true }
