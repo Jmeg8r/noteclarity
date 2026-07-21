@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Minimal hardened-runtime exception set. allow-jit covers the
+	     in-process JavaScriptCore plugin host; WKWebView panels run in
+	     Apple's own separately-entitled WebContent process and need
+	     nothing from us. Deliberately NOT requesting
+	     allow-unsigned-executable-memory or disable-library-validation. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+</dict>
+</plist>
