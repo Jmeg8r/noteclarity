@@ -86,6 +86,14 @@ final class EditorController: NSObject {
         ruler.onGutterClick = { [weak self] line in
             self?.toggleBookmark(atLine: line)
         }
+
+        #if DEBUG
+        // The completions delegate method is @objc-optional: a signature typo
+        // would compile and silently never be called. Every debug launch
+        // (including the headless test batteries) proves the wiring instead.
+        assert(responds(to: #selector(NSTextViewDelegate.textView(_:completions:forPartialWordRange:indexOfSelectedItem:))),
+               "completions delegate signature drifted — autocomplete would silently die")
+        #endif
     }
 
     // MARK: Text access
@@ -108,6 +116,7 @@ final class EditorController: NSObject {
         document.lineMarkers = LineMarkers()
         recomputeLineStarts()
         highlightNow()
+        scheduleWordCacheRebuild()
     }
 
     /// Undoable replacement routed through the standard NSTextView change pipeline.
@@ -162,6 +171,11 @@ final class EditorController: NSObject {
         setWordWrap(settings.wordWrap)
         ruler.refresh(lineStarts: lineStarts, currentLine: status().line - 1,
                       markers: document.lineMarkers)
+
+        autocompleteEnabled = settings.documentWordCompletionEnabled
+        textView.autocompleteEnabled = settings.documentWordCompletionEnabled
+        textView.autoPopupEnabled = settings.documentWordAutoPopupEnabled
+        scheduleWordCacheRebuild()   // covers first open and toggling the setting on
     }
 
     func setWordWrap(_ wrap: Bool) {
@@ -199,6 +213,42 @@ final class EditorController: NSObject {
             s.selectionLines = endIdx - lineIdx + 1
         }
         return s
+    }
+
+    // MARK: Autocomplete
+
+    private var wordCache: [String] = []
+    private let wordCacheDebouncer = Debouncer(0.4)
+    private var autocompleteEnabled = false
+    /// Documents beyond this size skip word harvesting entirely.
+    static let wordHarvestSizeLimit = 3_000_000
+
+    func scheduleWordCacheRebuild() {
+        guard autocompleteEnabled else { return }
+        wordCacheDebouncer.call { [weak self] in self?.rebuildWordCache() }
+    }
+
+    private func rebuildWordCache() {
+        guard utf16Length <= Self.wordHarvestSizeLimit, let regex = AppState.wordRegex else { return }
+        let gen = generation
+        let snapshot = textView.string
+        DispatchQueue.global(qos: .utility).async {
+            let ns = snapshot as NSString
+            var seen = Set<String>()
+            var words: [String] = []
+            regex.enumerateMatches(in: snapshot, options: [],
+                                   range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+                guard let r = match?.range, r.length >= 2 else { return }
+                let word = ns.substring(with: r)
+                guard word.rangeOfCharacter(from: .letters) != nil else { return }
+                if seen.insert(word).inserted { words.append(word) }
+            }
+            words.sort { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.generation == gen else { return }
+                self.wordCache = words
+            }
+        }
     }
 
     // MARK: Bookmarks
@@ -316,6 +366,15 @@ extension EditorController: NSTextViewDelegate, NSTextStorageDelegate {
             search = NSRange(location: next, length: remaining)
         }
         return count
+    }
+
+    func textView(_ textView: NSTextView, completions words: [String],
+                  forPartialWordRange charRange: NSRange,
+                  indexOfSelectedItem index: UnsafeMutablePointer<Int>?) -> [String] {
+        let ns = textView.string as NSString
+        guard charRange.length > 0, NSMaxRange(charRange) <= ns.length else { return [] }
+        index?.pointee = -1   // no pre-selected item; typing continues naturally
+        return WordCompletion.matches(for: ns.substring(with: charRange), in: wordCache)
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {

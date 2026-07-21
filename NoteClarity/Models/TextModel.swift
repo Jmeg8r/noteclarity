@@ -198,6 +198,21 @@ final class Debouncer {
     func cancel() { workItem?.cancel() }
 }
 
+// MARK: - Word completion matching
+
+/// Anchored case-insensitive prefix matching over a harvested word list.
+/// Foundation-only so the standalone swiftc battery can exercise it.
+enum WordCompletion {
+    static func matches(for partial: String, in cache: [String], cap: Int = 200) -> [String] {
+        guard !partial.isEmpty else { return [] }
+        let matched = cache.filter {
+            $0.count > partial.count
+                && $0.range(of: partial, options: [.anchored, .caseInsensitive]) != nil
+        }
+        return Array(matched.prefix(cap))
+    }
+}
+
 // MARK: - Line index lookup
 
 /// Binary search over a line-starts table (UTF-16 offsets). Shared by the

@@ -40,6 +40,8 @@ final class AppSettings: ObservableObject {
         static let wordWrap = "nc.wordWrap"
         static let zoomPercent = "nc.zoomPercent"
         static let autoReloadCleanDocuments = "nc.autoReloadCleanDocuments"
+        static let documentWordCompletionEnabled = "nc.documentWordCompletionEnabled"
+        static let documentWordAutoPopupEnabled = "nc.documentWordAutoPopupEnabled"
     }
 
     static let minZoom = 25
@@ -60,6 +62,10 @@ final class AppSettings: ObservableObject {
     /// Documents with no unsaved changes silently reload when their file
     /// changes on disk (Xcode/VS Code convention); dirty documents always prompt.
     @Published var autoReloadCleanDocuments: Bool { didSet { save() } }
+    /// Notepad++-style document-word completion (⌥Esc). Off by default, like
+    /// Notepad++ itself — opinionated behavior in a plaintext-first editor.
+    @Published var documentWordCompletionEnabled: Bool { didSet { save() } }
+    @Published var documentWordAutoPopupEnabled: Bool { didSet { save() } }
 
     private init() {
         let d = UserDefaults.standard
@@ -74,6 +80,8 @@ final class AppSettings: ObservableObject {
         wordWrap = d.object(forKey: K.wordWrap) as? Bool ?? true
         zoomPercent = min(Self.maxZoom, max(Self.minZoom, d.object(forKey: K.zoomPercent) as? Int ?? 100))
         autoReloadCleanDocuments = d.object(forKey: K.autoReloadCleanDocuments) as? Bool ?? true
+        documentWordCompletionEnabled = d.object(forKey: K.documentWordCompletionEnabled) as? Bool ?? false
+        documentWordAutoPopupEnabled = d.object(forKey: K.documentWordAutoPopupEnabled) as? Bool ?? false
     }
 
     private func save() {
@@ -89,6 +97,8 @@ final class AppSettings: ObservableObject {
         d.set(wordWrap, forKey: K.wordWrap)
         d.set(zoomPercent, forKey: K.zoomPercent)
         d.set(autoReloadCleanDocuments, forKey: K.autoReloadCleanDocuments)
+        d.set(documentWordCompletionEnabled, forKey: K.documentWordCompletionEnabled)
+        d.set(documentWordAutoPopupEnabled, forKey: K.documentWordAutoPopupEnabled)
     }
 
     func apply() {

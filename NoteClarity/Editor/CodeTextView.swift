@@ -16,6 +16,20 @@ final class CodeTextView: NSTextView {
     var insertSpacesForTab = true
     var tabWidth = 4
 
+    var autocompleteEnabled = false
+    var autoPopupEnabled = false
+    private let autoPopupDebouncer = Debouncer(0.35)
+
+    // MARK: Completion
+
+    /// The gate lives here, not in the key handler: `complete(_:)` is also
+    /// AppKit's own binding for bare Escape, so gating only ⌥Esc would let
+    /// the popup through with the feature off.
+    override func complete(_ sender: Any?) {
+        guard autocompleteEnabled else { return }
+        super.complete(sender)
+    }
+
     // MARK: Overwrite mode
 
     override func insertText(_ string: Any, replacementRange: NSRange) {
@@ -36,12 +50,27 @@ final class CodeTextView: NSTextView {
             }
         }
         super.insertText(string, replacementRange: repl)
+
+        // Auto-popup rides the typing chokepoint (paste never triggers it).
+        if autocompleteEnabled, autoPopupEnabled,
+           let s = string as? String, s.count == 1,
+           let scalar = s.unicodeScalars.first,
+           CharacterSet.alphanumerics.contains(scalar) || scalar == "_" {
+            autoPopupDebouncer.call { [weak self] in self?.complete(nil) }
+        }
     }
 
     override func keyDown(with event: NSEvent) {
         // 114 is the Insert/Help key; classic Notepad++ overwrite toggle.
         if event.keyCode == 114 {
             overwriteMode.toggle()
+            return
+        }
+        // 53 is Escape; ⌥Esc triggers word completion. Every other Escape
+        // combination falls through to AppKit (incl. popup dismissal).
+        if event.keyCode == 53,
+           event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .option {
+            complete(nil)
             return
         }
         super.keyDown(with: event)

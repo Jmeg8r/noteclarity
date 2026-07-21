@@ -496,6 +496,7 @@ final class AppState: ObservableObject {
             guard let self, let d = self.activeDocument else { return }
             self.emitDocumentEvent(.documentChanged, d)
         }
+        document.controller?.scheduleWordCacheRebuild()   // self-gates on the setting
         scheduleSessionSave()
     }
 
@@ -522,7 +523,9 @@ final class AppState: ObservableObject {
         wordsDebouncer.call { [weak self] in self?.recountWords() }
     }
 
-    private static let wordRegex = try? NSRegularExpression(pattern: #"[\p{L}\p{N}_'-]+"#)
+    /// Shared "what is a word" definition — the status-bar counter and the
+    /// autocomplete harvester must never drift apart.
+    static let wordRegex = try? NSRegularExpression(pattern: #"[\p{L}\p{N}_'-]+"#)
 
     private func recountWords() {
         guard let c = activeController, let regex = Self.wordRegex else { return }
