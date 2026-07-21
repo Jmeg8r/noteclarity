@@ -2,6 +2,10 @@
 <html>
 <head>
 <meta charset="utf-8">
+<!-- Defense-in-depth: the host already blocks remote loads for panels without
+     the network permission; this pins the page itself to inline assets. -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
 <style>
   :root { color-scheme: light dark; }
   body {
@@ -47,6 +51,15 @@
   function fmt(n) { return n.toLocaleString(); }
   window.__noteclarity_receive = function (msg) {
     if (!msg || msg.type !== "stats") return;
+    var docRow = document.getElementById("docRow");
+    if (msg.tooLarge) {
+      document.getElementById("path").textContent =
+        (msg.path || "Unsaved document") + " — too large for live statistics";
+      docRow.classList.add("hidden");
+      document.getElementById("selRow").classList.add("hidden");
+      return;
+    }
+    docRow.classList.remove("hidden");
     document.getElementById("path").textContent = msg.path || "Unsaved document";
     document.getElementById("dWords").textContent = fmt(msg.doc.words);
     document.getElementById("dChars").textContent = fmt(msg.doc.chars);

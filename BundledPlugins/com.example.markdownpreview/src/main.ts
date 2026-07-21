@@ -13,6 +13,9 @@ interface ExtensionContext {
 }
 
 let mdPanel: PanelHandle | null = null;
+// Above this size, re-rendering the whole document on every debounced change
+// would fight the editor for the main thread — preview suspends instead.
+const MAX_LIVE_CHARS = 1500000;
 
 function escapeHtml(s: string): string {
     return s
@@ -20,6 +23,20 @@ function escapeHtml(s: string): string {
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
+}
+
+// Scheme allowlist: document-controlled destinations must never become
+// javascript:/file:/data: vectors inside the panel webview. Relative paths and
+// fragments stay; unknown schemes render as plain text.
+function safeUrl(raw: string, kind: "link" | "image"): string | null {
+    const trimmed = raw.trim();
+    if (trimmed.charAt(0) === "#") return kind === "link" ? trimmed : null;
+    const schemeMatch = trimmed.match(/^([A-Za-z][A-Za-z0-9+.-]*):/);
+    if (!schemeMatch) return trimmed;
+    const scheme = schemeMatch[1].toLowerCase();
+    if (scheme === "http" || scheme === "https") return trimmed;
+    if (kind === "link" && scheme === "mailto") return trimmed;
+    return null;
 }
 
 // Inline markup. Code spans are split out first so markup inside them stays literal.
@@ -32,8 +49,16 @@ function inline(s: string): string {
             continue;
         }
         let t = escapeHtml(p);
-        t = t.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, '<img alt="$1" src="$2">');
-        t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>');
+        // Destinations were escapeHtml'd above, so quotes cannot break out of
+        // the attribute; safeUrl() decides whether the URL is usable at all.
+        t = t.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_m, alt: string, url: string) => {
+            const safe = safeUrl(url, "image");
+            return safe === null ? alt : '<img alt="' + alt + '" src="' + safe + '">';
+        });
+        t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label: string, url: string) => {
+            const safe = safeUrl(url, "link");
+            return safe === null ? label : '<a href="' + safe + '">' + label + "</a>";
+        });
         t = t.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
         t = t.replace(/__([^_\n]+)__/g, "<strong>$1</strong>");
         t = t.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
@@ -154,7 +179,9 @@ function render(): void {
     const lang = noteclarity.editor.getLanguage();
     const text = noteclarity.editor.getText();
     let html: string;
-    if (lang === "markdown" || lang === "plaintext") {
+    if (text.length > MAX_LIVE_CHARS) {
+        html = "<div class='nc-hint'>Document too large for live preview.</div>";
+    } else if (lang === "markdown" || lang === "plaintext") {
         html = markdownToHtml(text);
     } else {
         html = "<div class='nc-hint'>Active document language is “" + escapeHtml(lang) +

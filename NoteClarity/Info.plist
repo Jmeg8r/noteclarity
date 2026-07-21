@@ -32,9 +32,10 @@
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<!-- Plugins may fetch arbitrary (including http) endpoints via the
-		     permission-gated net.fetch API; the host does not restrict schemes. -->
-		<key>NSAllowsArbitraryLoads</key>
+		<!-- ATS stays fully enforced for the network at large; net.fetch is
+		     https-only. The single carve-out is cleartext to loopback so
+		     dev-tool plugins can talk to a local server. -->
+		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
 	<key>CFBundleDocumentTypes</key>
