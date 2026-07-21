@@ -124,7 +124,12 @@ src/             # optional TypeScript sources (for reference / community devs)
 ### Permissions
 
 Calls into a capability the manifest didn't request (or the user didn't grant) **throw**
-inside the plugin. Grants are surfaced on first enable and stored.
+inside the plugin. Grants are surfaced on first enable and stored **bound to the
+plugin's code identity** (a digest of `plugin.json` + the entry point): if either file
+or the requested permission set changes, the plugin is disabled until you review and
+re-enable it. Manifests are validated before load — IDs are ASCII reverse-DNS style
+(letters/digits joined by `.`/`-`/`_`), `main` must be a relative path inside the
+plugin folder, `apiVersion` must be supported, and duplicate plugin IDs refuse to load.
 
 | Permission | Gates |
 |---|---|
@@ -135,11 +140,17 @@ inside the plugin. Grants are surfaced on first enable and stored.
 | `ui.panel` | `ui.registerPanel` |
 | `ui.dialog` | `ui.showDialog` |
 | `fs.read` / `fs.write` | `fs.readFile` / `fs.writeFile` |
-| `network` | `net.fetch` |
+| `network` | `net.fetch` — **https only** (plus http to localhost for dev tools) |
 | `storage` | `storage.get/set` |
 
 Ungated: `ui.showNotification`, `events.on/off`, `console.log`, and
-`context.readResource` (reads only inside the plugin's own folder).
+`context.readResource` (reads only inside the plugin's own folder; containment is
+symlink-resolved).
+
+Panels render the plugin's local HTML and nothing else: without the `network`
+permission all http(s)/websocket subresource loads are blocked, in-panel navigation
+is refused, and clicked `https` links open in the default browser. Bridge messages
+are accepted only from the panel's own main frame.
 
 ### Lifecycle
 
