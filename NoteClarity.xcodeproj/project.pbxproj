@@ -10,10 +10,21 @@
 		4EC0DE0000000000000000AB /* BundledPlugins in Resources */ = {isa = PBXBuildFile; fileRef = 4EC0DE0000000000000000AC /* BundledPlugins */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		4EC0DE0000000000000000CB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4EC0DE0000000000000000A3 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4EC0DE0000000000000000A2;
+			remoteInfo = NoteClarity;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		4EC0DE0000000000000000A4 /* NoteClarity.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NoteClarity.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4EC0DE0000000000000000AC /* BundledPlugins */ = {isa = PBXFileReference; lastKnownFileType = folder; path = BundledPlugins; sourceTree = "<group>"; };
 		4EC0DE0000000000000000B5 /* noteclarity.d.ts */ = {isa = PBXFileReference; lastKnownFileType = text; path = noteclarity.d.ts; sourceTree = "<group>"; };
+		4EC0DE0000000000000000C3 /* NoteClarityTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NoteClarityTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -35,10 +46,24 @@
 			path = NoteClarity;
 			sourceTree = "<group>";
 		};
+		4EC0DE0000000000000000C1 /* NoteClarityTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
+			path = NoteClarityTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		4EC0DE0000000000000000A9 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4EC0DE0000000000000000C5 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -62,6 +87,7 @@
 			isa = PBXGroup;
 			children = (
 				4EC0DE0000000000000000A4 /* NoteClarity.app */,
+				4EC0DE0000000000000000C3 /* NoteClarityTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -99,6 +125,29 @@
 			productReference = 4EC0DE0000000000000000A4 /* NoteClarity.app */;
 			productType = "com.apple.product-type.application";
 		};
+		4EC0DE0000000000000000C2 /* NoteClarityTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4EC0DE0000000000000000C7 /* Build configuration list for PBXNativeTarget "NoteClarityTests" */;
+			buildPhases = (
+				4EC0DE0000000000000000C4 /* Sources */,
+				4EC0DE0000000000000000C5 /* Frameworks */,
+				4EC0DE0000000000000000C6 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4EC0DE0000000000000000CA /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				4EC0DE0000000000000000C1 /* NoteClarityTests */,
+			);
+			name = NoteClarityTests;
+			packageProductDependencies = (
+			);
+			productName = NoteClarityTests;
+			productReference = 4EC0DE0000000000000000C3 /* NoteClarityTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -111,6 +160,10 @@
 				TargetAttributes = {
 					4EC0DE0000000000000000A2 = {
 						CreatedOnToolsVersion = 16.0;
+					};
+					4EC0DE0000000000000000C2 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = 4EC0DE0000000000000000A2;
 					};
 				};
 			};
@@ -129,6 +182,7 @@
 			projectRoot = "";
 			targets = (
 				4EC0DE0000000000000000A2 /* NoteClarity */,
+				4EC0DE0000000000000000C2 /* NoteClarityTests */,
 			);
 		};
 /* End PBXProject section */
@@ -142,6 +196,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		4EC0DE0000000000000000C6 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -152,7 +213,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		4EC0DE0000000000000000C4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		4EC0DE0000000000000000CA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4EC0DE0000000000000000A2 /* NoteClarity */;
+			targetProxy = 4EC0DE0000000000000000CB /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		4EC0DE0000000000000000B1 /* Debug */ = {
@@ -327,6 +403,43 @@
 		};
 /* End XCBuildConfiguration section */
 
+		4EC0DE0000000000000000C8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 2.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jmeg8r.noteclarity.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NoteClarity.app/Contents/MacOS/NoteClarity";
+			};
+			name = Debug;
+		};
+		4EC0DE0000000000000000C9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 2.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jmeg8r.noteclarity.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NoteClarity.app/Contents/MacOS/NoteClarity";
+			};
+			name = Release;
+		};
+
 /* Begin XCConfigurationList section */
 		4EC0DE0000000000000000AD /* Build configuration list for PBXProject "NoteClarity" */ = {
 			isa = XCConfigurationList;
@@ -342,6 +455,15 @@
 			buildConfigurations = (
 				4EC0DE0000000000000000B3 /* Debug */,
 				4EC0DE0000000000000000B4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4EC0DE0000000000000000C7 /* Build configuration list for PBXNativeTarget "NoteClarityTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4EC0DE0000000000000000C8 /* Debug */,
+				4EC0DE0000000000000000C9 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

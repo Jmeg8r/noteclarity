@@ -51,23 +51,30 @@ enum FileEncoding: String, Codable, CaseIterable, Identifiable {
                                hadDecodingErrors: true, looksBinary: looksBinary(data))
         }
         if data.starts(with: [0xFF, 0xFE]) {
-            if let s = String(data: data.dropFirst(2), encoding: .utf16LittleEndian) {
+            // Foundation's UTF-16 decoder is lenient (odd-length bodies, lone
+            // surrogates); requiring a byte-identical re-encode is what makes
+            // "decoded cleanly" actually mean the save will round-trip.
+            let body = data.dropFirst(2)
+            if let s = String(data: body, encoding: .utf16LittleEndian),
+               s.data(using: .utf16LittleEndian) == body {
                 return DecodedFile(text: s, encoding: .utf16le,
                                    hadDecodingErrors: false, looksBinary: false)
             }
             return latin1Fallback(data, hadDecodingErrors: true)
         }
         if data.starts(with: [0xFE, 0xFF]) {
-            if let s = String(data: data.dropFirst(2), encoding: .utf16BigEndian) {
+            let body = data.dropFirst(2)
+            if let s = String(data: body, encoding: .utf16BigEndian),
+               s.data(using: .utf16BigEndian) == body {
                 return DecodedFile(text: s, encoding: .utf16be,
                                    hadDecodingErrors: false, looksBinary: false)
             }
             return latin1Fallback(data, hadDecodingErrors: true)
         }
-        if let s = String(data: data, encoding: .utf8) {
-            return DecodedFile(text: s, encoding: .utf8,
-                               hadDecodingErrors: false, looksBinary: looksBinary(data))
-        }
+        // The NUL-parity heuristic must run BEFORE the strict-UTF-8 check:
+        // BOM-less UTF-16 ASCII ("h\0e\0l\0…") is byte-valid UTF-8, so the
+        // other order silently opened such files as NUL-riddled UTF-8 and the
+        // next save rewrote them in the wrong encoding (P1-04-class).
         if data.count >= 4 {
             let sample = data.prefix(1024)
             var evenZeros = 0, oddZeros = 0
@@ -75,14 +82,20 @@ enum FileEncoding: String, Codable, CaseIterable, Identifiable {
                 if i % 2 == 0 { evenZeros += 1 } else { oddZeros += 1 }
             }
             let quarter = max(1, sample.count / 4)
-            if oddZeros >= quarter, let s = String(data: data, encoding: .utf16LittleEndian) {
+            if oddZeros >= quarter, let s = String(data: data, encoding: .utf16LittleEndian),
+               s.data(using: .utf16LittleEndian) == data {
                 return DecodedFile(text: s, encoding: .utf16le,
                                    hadDecodingErrors: false, looksBinary: false)
             }
-            if evenZeros >= quarter, let s = String(data: data, encoding: .utf16BigEndian) {
+            if evenZeros >= quarter, let s = String(data: data, encoding: .utf16BigEndian),
+               s.data(using: .utf16BigEndian) == data {
                 return DecodedFile(text: s, encoding: .utf16be,
                                    hadDecodingErrors: false, looksBinary: false)
             }
+        }
+        if let s = String(data: data, encoding: .utf8) {
+            return DecodedFile(text: s, encoding: .utf8,
+                               hadDecodingErrors: false, looksBinary: looksBinary(data))
         }
         return latin1Fallback(data, hadDecodingErrors: false)
     }

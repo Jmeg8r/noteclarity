@@ -32,6 +32,14 @@ jobs:
           -configuration Debug -destination 'platform=macOS'
           CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 
+      - name: Unit tests
+        # The scheme's TestAction pins NOTECLARITY_SUPPORT_DIR/UPDATE_API to
+        # scratch values, so the hosted app never touches a real profile.
+        run: >
+          xcodebuild test -project NoteClarity.xcodeproj -scheme NoteClarity
+          -destination 'platform=macOS'
+          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+
       - name: Build (Release)
         run: >
           xcodebuild build -project NoteClarity.xcodeproj -scheme NoteClarity
