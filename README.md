@@ -17,8 +17,10 @@ Zero third-party dependencies. Apple system frameworks only.
 1. Open `NoteClarity.xcodeproj` in Xcode.
 2. Select the **NoteClarity** scheme (auto-created) and press **Run** (⌘R).
 
-That's it — no packages to resolve, no scripts, no network. Signing is ad-hoc
-("Sign to Run Locally"), so no team account is needed.
+That's it — no packages to resolve, no scripts, no network. Debug signing is
+ad-hoc ("Sign to Run Locally"), so no team account is needed. Release archives
+sign with Developer ID + hardened runtime via `Scripts/release.sh` (see the
+script header for the one-time notarization setup).
 
 Command line equivalent:
 
@@ -43,7 +45,11 @@ JSON Formatter adds commands to the **Plugins** menu.
 | Find & Replace | Regex (with `$1…$n` templates), match case, whole word, in-selection scope, next/prev, Find All (multi-select), Replace All with match count |
 | Encodings | UTF-8, UTF-8 BOM, UTF-16 LE/BE (BOM-correct read *and* write), ISO-8859-1 read fallback; convert from the status bar |
 | Line endings | LF / CRLF / CR detect, display, convert (buffer is LF internally; the ending is applied on save) |
-| Session | Reopens previous tabs, unsaved (draft) buffers, cursor positions, and panel layout on launch |
+| Session | Reopens previous tabs, unsaved (draft) buffers, cursor positions, bookmarks, and panel layout on launch; drafts are rewritten crash-safely (no destructive wipe) |
+| File watching | Clean documents auto-reload when their file changes on disk (setting, default on); dirty documents get a Reload / Keep Mine prompt; deleted files keep the buffer with a tab warning badge; File ▸ Reload from Disk |
+| Bookmarks & change bars | Gutter bookmarks — click the gutter or ⌘F2 to toggle, F2/⇧F2 to cycle — plus Notepad++-style changed-line bars (orange = unsaved edit, green = saved) |
+| Autocomplete | Document-word completion via the native popup (⌥Esc; optional auto-popup while typing) — Settings ▸ Editor, off by default |
+| Updates | NoteClarity ▸ Check for Updates…, plus a weekly auto-check against GitHub releases (opt-out in Settings ▸ General) |
 | Sidebar | Function List (regex symbol extraction for Swift, Python, JS/TS; click to jump) + open/recent files; hosts plugin panels declaring `location: "left"` |
 | Status bar | Ln/Col · selection chars+lines · length/words/lines · language · encoding · EOL · INS/OVR · zoom — the last five are clickable |
 | Theming | Light + Dark first-class via asset-catalog semantic colors; System/Light/Dark override in Settings, the View menu, and the toolbar; Notepad++-green accent (or follow the system accent) |
@@ -258,13 +264,19 @@ every API group: **Markdown Preview** (panels, events, bridge), **JSON Formatter
 
 ---
 
-## Notes & limits (v1)
+## Notes & limits (v2.0)
 
 - Syntax coloring is regex-based (fast, dependency-free) and intentionally not a full
   parser; token coloring pauses above ~1.5 MB per document.
 - Bundled plugins are granted their manifest permissions at seed time (they ship inside
   the app); hand-installed plugins always get the permission prompt on first enable.
-- The app is unsandboxed so plugins' `fs`/`network` capabilities behave as documented.
-- Stretch features not in v1: column/block selection & multi-cursor (beyond Find All's
-  multi-selection), code folding, document map/minimap, macro record & replay, split
-  view, autocompletion.
+- The app is unsandboxed so plugins' `fs`/`network` capabilities behave as documented
+  (this also rules out Mac App Store distribution — direct download only). The hardened
+  runtime is enabled with a single entitlement (`allow-jit`, for the JavaScriptCore
+  plugin host).
+- Bare F2 is intercepted as brightness on most Mac keyboards unless "Use F1, F2, etc. as
+  standard function keys" is enabled — use Fn+F2 or click the gutter.
+- Changed-line bars are touch-tracked, not content-diffed (undo does not clear them —
+  same as Notepad++), and reset on reload/restart.
+- Still deferred (v2.1+): column/block selection & multi-cursor (beyond Find All's
+  multi-selection), code folding, document map/minimap, macro record & replay, split view.
