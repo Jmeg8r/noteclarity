@@ -2,42 +2,43 @@ import AppKit
 
 /// Line-number gutter for the TextKit 2 editor. Numbers one entry per paragraph
 /// (wrapped continuation lines are unnumbered), with the caret's line accented.
+/// Also draws line markers — bookmark dots and changed-line bars — and toggles
+/// bookmarks on click.
 final class LineNumberRulerView: NSRulerView {
     private weak var codeView: CodeTextView?
     private var lineStarts: [Int] = [0]
     private var currentLine = 0
+    private var lineMarkers = LineMarkers()
+
+    /// Fixed extra column so bookmark dots never overlap the numbers.
+    static let markerGutterWidth: CGFloat = 14
+    /// Width of the changed-line bar at the gutter's leading edge.
+    static let changeBarWidth: CGFloat = 3
+
+    var onGutterClick: ((Int) -> Void)?
 
     init(textView: CodeTextView, scrollView: NSScrollView) {
         codeView = textView
         super.init(scrollView: scrollView, orientation: .verticalRuler)
         clientView = textView
-        ruleThickness = 46
+        ruleThickness = 46 + Self.markerGutterWidth
     }
 
     required init(coder: NSCoder) {
         fatalError("LineNumberRulerView is never decoded")
     }
 
-    func refresh(lineStarts: [Int], currentLine: Int) {
+    func refresh(lineStarts: [Int], currentLine: Int, markers: LineMarkers) {
         self.lineStarts = lineStarts
         self.currentLine = currentLine
+        self.lineMarkers = markers
         let digits = max(3, String(lineStarts.count).count)
         let size = max(9, ((codeView?.font?.pointSize) ?? 13) * 0.82)
         let font = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .regular)
         let charWidth = ("8" as NSString).size(withAttributes: [.font: font]).width
-        let needed = ceil(CGFloat(digits) * charWidth) + 18
+        let needed = ceil(CGFloat(digits) * charWidth) + 18 + Self.markerGutterWidth
         if abs(needed - ruleThickness) > 0.5 { ruleThickness = needed }
         needsDisplay = true
-    }
-
-    /// Index of the line containing `offset` (largest start <= offset), binary search.
-    static func lineIndex(for offset: Int, in starts: [Int]) -> Int {
-        var lo = 0, hi = starts.count - 1
-        while lo < hi {
-            let mid = (lo + hi + 1) / 2
-            if starts[mid] <= offset { lo = mid } else { hi = mid - 1 }
-        }
-        return lo
     }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {
@@ -71,19 +72,47 @@ final class LineNumberRulerView: NSRulerView {
             if frame.maxY + insetY < visible.minY { return true }
 
             let offset = lm.offset(from: lm.documentRange.location, to: frag.rangeInElement.location)
-            let line = Self.lineIndex(for: offset, in: self.lineStarts)
+            let line = LineIndex.of(offset, in: self.lineStarts)
             guard line != lastDrawnLine else { return true }
             lastDrawnLine = line
+
+            let firstLineHeight = frag.textLineFragments.first?.typographicBounds.height ?? frame.height
+            let yInRuler = self.convert(NSPoint(x: 0, y: top), from: tv).y
+
+            if self.lineMarkers.changedUnsaved.contains(line) || self.lineMarkers.changedSaved.contains(line) {
+                let color = self.lineMarkers.changedUnsaved.contains(line)
+                    ? EditorTheme.changedUnsaved : EditorTheme.changedSaved
+                color.setFill()
+                NSRect(x: 0, y: yInRuler, width: Self.changeBarWidth, height: firstLineHeight).fill()
+            }
+            if self.lineMarkers.bookmarks.contains(line) {
+                EditorTheme.bookmark.setFill()
+                let d: CGFloat = 7
+                NSBezierPath(ovalIn: NSRect(x: Self.changeBarWidth + 3,
+                                            y: yInRuler + (firstLineHeight - d) / 2,
+                                            width: d, height: d)).fill()
+            }
 
             let attrs = line == self.currentLine ? currentAttrs : normalAttrs
             let label = "\(line + 1)" as NSString
             let labelSize = label.size(withAttributes: attrs)
-            let firstLineHeight = frag.textLineFragments.first?.typographicBounds.height ?? frame.height
-            let yInRuler = self.convert(NSPoint(x: 0, y: top), from: tv).y
             label.draw(at: NSPoint(x: self.bounds.maxX - labelSize.width - 9,
                                    y: yInRuler + (firstLineHeight - labelSize.height) / 2),
                        withAttributes: attrs)
             return true
         }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let tv = codeView, let lm = tv.textLayoutManager else {
+            super.mouseDown(with: event)
+            return
+        }
+        let localPoint = convert(event.locationInWindow, from: nil)
+        var pointInText = convert(localPoint, to: tv)
+        pointInText.y -= tv.textContainerInset.height
+        guard let frag = lm.textLayoutFragment(for: pointInText) else { return }
+        let offset = lm.offset(from: lm.documentRange.location, to: frag.rangeInElement.location)
+        onGutterClick?(LineIndex.of(offset, in: lineStarts))
     }
 }

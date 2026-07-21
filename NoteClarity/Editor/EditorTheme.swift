@@ -17,6 +17,9 @@ enum EditorTheme {
     static var gutterBackground: NSColor { color("GutterBackground", .windowBackgroundColor) }
     static var gutterText: NSColor { color("GutterText", .secondaryLabelColor) }
     static var accent: NSColor { color("NppGreen", .controlAccentColor) }
+    static var changedUnsaved: NSColor { color("EditorChangedUnsaved", .systemOrange) }
+    static var changedSaved: NSColor { color("EditorChangedSaved", .systemGreen) }
+    static var bookmark: NSColor { color("EditorBookmark", .systemBlue) }
 
     static func tokenColor(_ token: TokenType) -> NSColor {
         switch token {
