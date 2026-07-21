@@ -1,17 +1,19 @@
-# Bundled fonts — Iosevka
+# Bundled fonts — Iosevka (SIL OFL 1.1)
 
-DESIGN.md specifies **Iosevka Term** (editor buffer) and **Iosevka Aile**
-(chrome) as the app's type stack, bundled as TTFs under SIL OFL 1.1.
+DESIGN.md's type stack, shipped verbatim as `Contents/Resources/Fonts` and
+registered at launch via `ATSApplicationFontsPath`. License: `LICENSE-OFL.md`.
 
-Drop the static TTFs here (no build-step needed — this folder ships verbatim
-as `Contents/Resources/Fonts`, which `ATSApplicationFontsPath` registers at
-launch):
+Bundled (Iosevka v34.7.0, trimmed to ~31 MB by decision 2026-07-21):
 
-- `IosevkaTerm-Regular.ttf`, `IosevkaTerm-Italic.ttf`, `IosevkaTerm-Bold.ttf`
-- `IosevkaAile-Regular.ttf`, `IosevkaAile-Medium.ttf`, `IosevkaAile-SemiBold.ttf`
+- `IosevkaTerm-Regular.ttf` — editor buffer
+- `IosevkaTerm-Italic.ttf` — real italics for comments
+- `IosevkaAile-Regular.ttf` — chrome (tabs, status bar, labels)
 
-Download: <https://github.com/be5invis/Iosevka/releases> (the `PkgTTF-IosevkaTerm`
-and `PkgTTF-IosevkaAile` packages). Include the OFL license file alongside.
+Chrome Medium/SemiBold emphasis currently falls back to the nearest bundled
+weight. To restore full emphasis, drop in `IosevkaAile-Medium.ttf`,
+`IosevkaAile-SemiBold.ttf` (and `IosevkaTerm-Bold.ttf` for editor bold) from
+the `PkgTTF-IosevkaAile`/`PkgTTF-IosevkaTerm` packages at
+<https://github.com/be5invis/Iosevka/releases> — no build changes needed.
 
-Until the TTFs are present, `Typography` falls back to the documented stack —
-SF Mono (editor) / SF Pro (chrome). Nothing else changes.
+If the folder is emptied, `Typography` falls back to the documented stack:
+SF Mono (editor) / SF Pro (chrome).
