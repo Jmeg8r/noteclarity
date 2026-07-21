@@ -8,7 +8,7 @@ in JavaScriptCore with WKWebView panels.
 Zero third-party dependencies. Apple system frameworks only.
 
 - **Minimum OS:** macOS 14 (Sonoma) · **Xcode:** 16 or newer
-- **Bundle id:** `com.example.noteclarity` (placeholder)
+- **Bundle id:** `com.jmeg8r.noteclarity`
 
 ---
 

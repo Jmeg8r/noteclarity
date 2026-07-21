@@ -62,6 +62,10 @@ final class AppSettings: ObservableObject {
     @Published var autoReloadCleanDocuments: Bool { didSet { save() } }
 
     private init() {
+        // Must precede every UserDefaults read; AppState's stored
+        // `settings = AppSettings.shared` guarantees this runs before
+        // AppState.init touches recents or plugin maps.
+        DefaultsMigration.runOnce()
         let d = UserDefaults.standard
         appearance = AppearanceMode(rawValue: d.string(forKey: K.appearance) ?? "") ?? .system
         useSystemAccent = d.object(forKey: K.useSystemAccent) as? Bool ?? false
