@@ -12,6 +12,9 @@ import JavaScriptCore
 final class PluginInstance {
     let manifest: PluginManifest
     let directory: URL
+    /// Validated entry point resolved by `PluginManifestValidator` — never
+    /// derived from raw manifest text here (P1-02).
+    let mainURL: URL
     let granted: Set<String>
     unowned let manager: PluginManager
 
@@ -21,14 +24,23 @@ final class PluginInstance {
     private(set) var panels: [String: PanelController] = [:]
     private(set) var dynamicMenuItems: [PluginMenuItem] = []
 
+    /// First exception raised while `load()` is on the stack; makes top-level
+    /// and activate() failures deterministic load errors instead of toasts (P2-04).
+    private var loadPhaseException: String?
+    private var isLoading = false
+
     private var storageCache: [String: Any]?
     private var storageURL: URL {
+        // The ID passed manifest validation (bounded, separator-free charset),
+        // so it is safe as a single filename component.
         PluginManager.pluginDataDirectory.appendingPathComponent("\(manifest.id).json")
     }
 
-    init(manifest: PluginManifest, directory: URL, granted: Set<String>, manager: PluginManager) {
+    init(manifest: PluginManifest, directory: URL, mainURL: URL, granted: Set<String>,
+         manager: PluginManager) {
         self.manifest = manifest
         self.directory = directory
+        self.mainURL = mainURL
         self.granted = granted
         self.manager = manager
     }
@@ -44,6 +56,10 @@ final class PluginInstance {
         let pluginName = manifest.name
         ctx.exceptionHandler = { [weak self] _, exception in
             let message = exception?.toString() ?? "unknown error"
+            if let self, self.isLoading {
+                if self.loadPhaseException == nil { self.loadPhaseException = message }
+                return
+            }
             NSLog("[NoteClarity] plugin '%@' exception: %@", pluginName, message)
             DispatchQueue.main.async {
                 self?.manager.host?.pluginToast("Plugin \(pluginName): \(message)")
@@ -54,14 +70,32 @@ final class PluginInstance {
         // CommonJS-style shims so `exports.activate = …` also works.
         ctx.evaluateScript("var exports = {}; var module = { exports: exports };")
 
-        let mainURL = directory.appendingPathComponent(manifest.main)
         let source = try String(contentsOf: mainURL, encoding: .utf8)
         context = ctx
+        isLoading = true
+        defer { isLoading = false }
+
         ctx.evaluateScript(source, withSourceURL: mainURL)
+        try failLoadIfScriptThrew("evaluating \(manifest.main)")
 
         if let activate = function(named: "activate", in: ctx) {
             activate.call(withArguments: [makeExtensionContext(ctx)])
+            try failLoadIfScriptThrew("activate()")
         }
+    }
+
+    private func failLoadIfScriptThrew(_ phase: String) throws {
+        guard let message = loadPhaseException else { return }
+        // Roll back anything the partial load registered before failing.
+        for panel in panels.values { panel.teardown() }
+        panels.removeAll()
+        commandCallbacks.removeAll()
+        eventListeners.removeAll()
+        dynamicMenuItems.removeAll()
+        context = nil
+        loadPhaseException = nil
+        throw NSError(domain: "NoteClarity.Plugin", code: 2,
+                      userInfo: [NSLocalizedDescriptionKey: "Error \(phase): \(message)"])
     }
 
     func unload() {
@@ -158,12 +192,12 @@ final class PluginInstance {
         obj.setObject(manager.host?.appVersion ?? "1.0", forKeyedSubscript: "appVersion" as NSString)
 
         // Reads a file bundled inside the plugin's own folder (ungated: the plugin
-        // ships those files itself). Path traversal outside the folder is refused.
-        let dir = directory.standardizedFileURL
+        // ships those files itself). Containment is symlink-resolved (P1-02), so
+        // neither `..` nor a planted symlink can reach outside the folder.
+        let dir = directory
         let readResource: @convention(block) (String) -> String = { [weak self] relative in
             guard let self else { return "" }
-            let target = dir.appendingPathComponent(relative).standardizedFileURL
-            guard target.path.hasPrefix(dir.path + "/") else {
+            guard let target = PluginPathPolicy.containedURL(root: dir, relative: relative) else {
                 self.throwError("readResource: path escapes the plugin folder")
                 return ""
             }
@@ -306,7 +340,7 @@ final class PluginInstance {
         let execute: @convention(block) (String) -> Void = { [weak self] id in
             guard let self else { return }
             guard self.has(.commands) else { self.deny(.commands); return }
-            if !self.manager.executeCommand(id) {
+            if !self.manager.executeCommand(id, preferring: self.manifest.id) {
                 self.throwError("commands.execute: no command registered with id '\(id)'")
             }
         }
@@ -357,7 +391,8 @@ final class PluginInstance {
             if let existing = self.panels[panelID] { existing.teardown() }
             let panel = PanelController(pluginID: self.manifest.id, panelID: panelID,
                                         title: title, location: location,
-                                        html: html, baseURL: self.directory, instance: self)
+                                        html: html, baseURL: self.directory, instance: self,
+                                        networkAllowed: self.has(.network))
             self.panels[panelID] = panel
             self.manager.contributionsDidChange()
             return self.makePanelHandle(ctx, panel: panel)
@@ -485,7 +520,13 @@ final class PluginInstance {
                 cache[key] = object
             }
             self.storageCache = cache
-            self.persistStorage()
+            do {
+                try self.persistStorage()
+            } catch {
+                // A silently failed write would let the plugin believe the
+                // value is durable (P2-07) — surface it to the caller.
+                self.throwError("storage.set: could not persist (\(error.localizedDescription))")
+            }
         }
         set(storageAPI, "set", setValue)
 
@@ -495,19 +536,27 @@ final class PluginInstance {
     private func loadedStorage() -> [String: Any] {
         if let cached = storageCache { return cached }
         var loaded: [String: Any] = [:]
-        if let data = try? Data(contentsOf: storageURL),
-           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            loaded = object
+        if let data = try? Data(contentsOf: storageURL) {
+            if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                loaded = object
+            } else {
+                // Malformed is not the same as absent (P2-07): quarantine the
+                // bytes instead of silently overwriting them on the next set.
+                let quarantine = storageURL.appendingPathExtension("corrupt")
+                try? FileManager.default.removeItem(at: quarantine)
+                try? FileManager.default.moveItem(at: storageURL, to: quarantine)
+                NSLog("[NoteClarity] plugin %@ storage was malformed; moved to %@",
+                      manifest.id, quarantine.lastPathComponent)
+            }
         }
         storageCache = loaded
         return loaded
     }
 
-    private func persistStorage() {
-        guard let cache = storageCache,
-              let data = try? JSONSerialization.data(withJSONObject: cache, options: [.sortedKeys])
-        else { return }
-        try? data.write(to: storageURL, options: .atomic)
+    private func persistStorage() throws {
+        guard let cache = storageCache else { return }
+        let data = try JSONSerialization.data(withJSONObject: cache, options: [.sortedKeys])
+        try data.write(to: storageURL, options: .atomic)
     }
 
     private func makeFSAPI(_ ctx: JSContext) -> JSValue {
@@ -552,6 +601,13 @@ final class PluginInstance {
                     reject?.call(withArguments: ["net.fetch: invalid URL '\(urlString)'"])
                     return
                 }
+                // ATS is no longer globally disabled (P1-01): cleartext is
+                // allowed only to loopback, so fail with a clear message
+                // instead of an opaque transport-security error.
+                guard Self.isAllowedFetchURL(url) else {
+                    reject?.call(withArguments: ["net.fetch: only https URLs (or http to localhost) are allowed"])
+                    return
+                }
                 var request = URLRequest(url: url)
                 request.httpMethod = dict["method"] as? String ?? "GET"
                 if let headers = dict["headers"] as? [String: String] {
@@ -577,5 +633,17 @@ final class PluginInstance {
         set(netAPI, "fetch", fetch)
 
         return netAPI
+    }
+
+    static func isAllowedFetchURL(_ url: URL) -> Bool {
+        switch url.scheme?.lowercased() {
+        case "https":
+            return true
+        case "http":
+            let host = url.host?.lowercased() ?? ""
+            return host == "localhost" || host == "127.0.0.1" || host == "::1"
+        default:
+            return false
+        }
     }
 }

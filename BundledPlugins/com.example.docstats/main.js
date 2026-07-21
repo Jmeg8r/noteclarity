@@ -4,6 +4,9 @@
 
 var statsPanel = null;
 var READING_WPM = 200;
+// Above this size, per-keystroke full-document counting would fight the editor
+// for the main thread — statistics suspend instead (documented threshold).
+var MAX_LIVE_CHARS = 1500000;
 
 function countText(text) {
     var words = (text.match(/[\p{L}\p{N}_'’-]+/gu) || []).length;
@@ -15,6 +18,14 @@ function countText(text) {
 function update() {
     if (!statsPanel) return;
     var text = noteclarity.editor.getText();
+    if (text.length > MAX_LIVE_CHARS) {
+        statsPanel.postMessage({
+            type: "stats",
+            tooLarge: true,
+            path: noteclarity.editor.getFilePath()
+        });
+        return;
+    }
     var selection = noteclarity.editor.getSelection();
     statsPanel.postMessage({
         type: "stats",

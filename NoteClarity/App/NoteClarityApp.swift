@@ -177,7 +177,7 @@ struct AppCommands: Commands {
                 ForEach(groups) { group in
                     Menu(group.pluginName) {
                         ForEach(group.items) { item in
-                            Button(item.title) { plugins.executeCommand(item.command) }
+                            Button(item.title) { plugins.executeMenuCommand(item) }
                         }
                     }
                 }
