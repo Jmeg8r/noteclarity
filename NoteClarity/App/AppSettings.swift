@@ -39,6 +39,7 @@ final class AppSettings: ObservableObject {
         static let defaultLineEnding = "nc.defaultLineEnding"
         static let wordWrap = "nc.wordWrap"
         static let zoomPercent = "nc.zoomPercent"
+        static let autoReloadCleanDocuments = "nc.autoReloadCleanDocuments"
     }
 
     static let minZoom = 25
@@ -56,6 +57,9 @@ final class AppSettings: ObservableObject {
     @Published var defaultLineEnding: LineEnding { didSet { save() } }
     @Published var wordWrap: Bool { didSet { save() } }
     @Published var zoomPercent: Int { didSet { save() } }
+    /// Documents with no unsaved changes silently reload when their file
+    /// changes on disk (Xcode/VS Code convention); dirty documents always prompt.
+    @Published var autoReloadCleanDocuments: Bool { didSet { save() } }
 
     private init() {
         let d = UserDefaults.standard
@@ -69,6 +73,7 @@ final class AppSettings: ObservableObject {
         defaultLineEnding = LineEnding(rawValue: d.string(forKey: K.defaultLineEnding) ?? "") ?? .lf
         wordWrap = d.object(forKey: K.wordWrap) as? Bool ?? true
         zoomPercent = min(Self.maxZoom, max(Self.minZoom, d.object(forKey: K.zoomPercent) as? Int ?? 100))
+        autoReloadCleanDocuments = d.object(forKey: K.autoReloadCleanDocuments) as? Bool ?? true
     }
 
     private func save() {
@@ -83,6 +88,7 @@ final class AppSettings: ObservableObject {
         d.set(defaultLineEnding.rawValue, forKey: K.defaultLineEnding)
         d.set(wordWrap, forKey: K.wordWrap)
         d.set(zoomPercent, forKey: K.zoomPercent)
+        d.set(autoReloadCleanDocuments, forKey: K.autoReloadCleanDocuments)
     }
 
     func apply() {
