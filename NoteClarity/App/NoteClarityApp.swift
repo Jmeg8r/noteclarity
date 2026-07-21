@@ -103,6 +103,13 @@ struct AppCommands: Commands {
                     .keyboardShortcut("e", modifiers: .command)
                 Button("Replace…") { app.showFindBar(focusReplace: true) }
                     .keyboardShortcut("f", modifiers: [.command, .option])
+                Divider()
+                Button("Toggle Bookmark") { app.toggleBookmarkOnCurrentLine() }
+                    .keyboardShortcut(KeyEquivalent(Character(UnicodeScalar(NSF2FunctionKey)!)), modifiers: .command)
+                Button("Next Bookmark") { app.jumpToBookmark() }
+                    .keyboardShortcut(KeyEquivalent(Character(UnicodeScalar(NSF2FunctionKey)!)), modifiers: [])
+                Button("Previous Bookmark") { app.jumpToBookmark(backwards: true) }
+                    .keyboardShortcut(KeyEquivalent(Character(UnicodeScalar(NSF2FunctionKey)!)), modifiers: .shift)
             }
         }
 

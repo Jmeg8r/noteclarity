@@ -82,6 +82,10 @@ final class EditorController: NSObject {
         tv.string = initialText
         suppressEditCallbacks = false
         recomputeLineStarts()
+
+        ruler.onGutterClick = { [weak self] line in
+            self?.toggleBookmark(atLine: line)
+        }
     }
 
     // MARK: Text access
@@ -99,6 +103,9 @@ final class EditorController: NSObject {
         suppressEditCallbacks = false
         textView.undoManager?.removeAllActions()
         generation += 1
+        // A full-buffer replacement has no diffable old/new line correspondence;
+        // stale marker indices would silently point at the wrong content.
+        document.lineMarkers = LineMarkers()
         recomputeLineStarts()
         highlightNow()
     }
@@ -153,7 +160,8 @@ final class EditorController: NSObject {
             storage.endEditing()
         }
         setWordWrap(settings.wordWrap)
-        ruler.refresh(lineStarts: lineStarts, currentLine: status().line - 1)
+        ruler.refresh(lineStarts: lineStarts, currentLine: status().line - 1,
+                      markers: document.lineMarkers)
     }
 
     func setWordWrap(_ wrap: Bool) {
@@ -182,15 +190,31 @@ final class EditorController: NSObject {
         let sel = textView.selectedRange()
         s.totalChars = utf16Length
         s.lineCount = lineStarts.count
-        let lineIdx = LineNumberRulerView.lineIndex(for: sel.location, in: lineStarts)
+        let lineIdx = LineIndex.of(sel.location, in: lineStarts)
         s.line = lineIdx + 1
         s.column = sel.location - lineStarts[lineIdx] + 1
         s.selectionChars = sel.length
         if sel.length > 0 {
-            let endIdx = LineNumberRulerView.lineIndex(for: max(sel.location, NSMaxRange(sel) - 1), in: lineStarts)
+            let endIdx = LineIndex.of(max(sel.location, NSMaxRange(sel) - 1), in: lineStarts)
             s.selectionLines = endIdx - lineIdx + 1
         }
         return s
+    }
+
+    // MARK: Bookmarks
+
+    var onBookmarksChanged: (() -> Void)?
+
+    func toggleBookmark(atLine line: Int) {
+        guard line >= 0, line < lineStarts.count else { return }
+        if document.lineMarkers.bookmarks.contains(line) {
+            document.lineMarkers.bookmarks.remove(line)
+        } else {
+            document.lineMarkers.bookmarks.insert(line)
+        }
+        ruler.refresh(lineStarts: lineStarts, currentLine: status().line - 1,
+                      markers: document.lineMarkers)
+        onBookmarksChanged?()
     }
 
     // MARK: Line starts
@@ -254,12 +278,44 @@ extension EditorController: NSTextViewDelegate, NSTextStorageDelegate {
         // Captured synchronously: the flag is only true for the duration of a
         // programmatic set, but the reaction below runs on the next runloop turn.
         let suppressed = suppressEditCallbacks
+        if !suppressed {
+            // Must run synchronously: lineStarts still holds PRE-edit offsets
+            // here (recomputed only in the deferred block below), which is
+            // exactly what the marker math needs. Mutating a plain struct is
+            // fine — the "illegal in the edit pass" rule covers layout and
+            // attribute mutation only.
+            let ns = textStorage.string as NSString
+            let newNewlines = Self.newlineCount(in: ns, range: editedRange)
+            let endsWithNewline = editedRange.length > 0
+                && ns.character(at: NSMaxRange(editedRange) - 1) == 0x0A
+            document.lineMarkers.applyEdit(oldLineStarts: lineStarts,
+                                           editedRange: editedRange,
+                                           delta: delta,
+                                           newNewlines: newNewlines,
+                                           newTextEndsWithNewline: endsWithNewline)
+        }
         // Deferred: mutating layout/attributes inside the edit pass is illegal.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.recomputeLineStarts()
             if !suppressed { self.onEdit?() }
         }
+    }
+
+    private static func newlineCount(in ns: NSString, range: NSRange) -> Int {
+        guard range.length > 0 else { return 0 }
+        var count = 0
+        var search = range
+        while true {
+            let r = ns.range(of: "\n", options: [], range: search)
+            if r.location == NSNotFound { break }
+            count += 1
+            let next = r.location + 1
+            let remaining = NSMaxRange(range) - next
+            if remaining <= 0 { break }
+            search = NSRange(location: next, length: remaining)
+        }
+        return count
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
