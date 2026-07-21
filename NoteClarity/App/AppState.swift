@@ -24,6 +24,10 @@ final class Document: ObservableObject, Identifiable {
     /// Per-document undo history, kept across tab switches.
     let undoManager = UndoManager()
 
+    /// Bookmarks + changed-line markers; mutated synchronously by the
+    /// controller's didProcessEditing and read by the ruler.
+    var lineMarkers = LineMarkers()
+
     /// Text held before the editor controller exists (open / session restore).
     var pendingText: String
     var pendingCursor = 0
@@ -178,6 +182,7 @@ final class AppState: ObservableObject {
             guard let self, let c else { return }
             self.setOverwriteMode(c.textView.overwriteMode)
         }
+        c.onBookmarksChanged = { [weak self] in self?.scheduleSessionSave() }
         c.highlightNow()
         // Setting the initial string leaves the caret at the end; restore the
         // session position (0 for freshly opened files).
@@ -350,8 +355,10 @@ final class AppState: ObservableObject {
         }
         document.isDirty = false
         document.fileState = .onDisk
+        document.lineMarkers.markSaved()
         document.lastKnownModificationDate = Self.modificationDate(of: url)
         document.fileWatcher?.resumeAfterOwnWrite()
+        if document.id == activeID { refreshStatus() }   // repaint orange bars green
         emitDocumentEvent(.documentSaved, document)
         scheduleSessionSave()
         return true
@@ -440,6 +447,26 @@ final class AppState: ObservableObject {
         handleExternalChange(d, .modified)
     }
 
+    // MARK: Bookmarks
+
+    func toggleBookmarkOnCurrentLine() {
+        guard let c = activeController else { return }
+        c.toggleBookmark(atLine: c.status().line - 1)
+    }
+
+    func jumpToBookmark(backwards: Bool = false) {
+        guard let c = activeController else { return }
+        let marks = c.document.lineMarkers.bookmarks.sorted()
+        guard !marks.isEmpty else { showToast("No bookmarks"); return }
+        let currentLine = c.status().line - 1
+        // Cyclic, mirroring findNext's wrap behavior.
+        let target = backwards
+            ? (marks.last { $0 < currentLine } ?? marks.last!)
+            : (marks.first { $0 > currentLine } ?? marks.first!)
+        guard target < c.lineStarts.count else { return }
+        c.jump(to: c.lineStarts[target])
+    }
+
     private func recheckAllDocumentsForExternalChanges() {
         for d in documents {
             guard let url = d.url else { continue }
@@ -490,7 +517,8 @@ final class AppState: ObservableObject {
         var s = c.status()
         s.words = lastWordCount
         status = s
-        c.ruler.refresh(lineStarts: c.lineStarts, currentLine: s.line - 1)
+        c.ruler.refresh(lineStarts: c.lineStarts, currentLine: s.line - 1,
+                        markers: c.document.lineMarkers)
         wordsDebouncer.call { [weak self] in self?.recountWords() }
     }
 
@@ -649,6 +677,7 @@ final class AppState: ObservableObject {
         var eol: LineEnding
         var language: Language?
         var dirty: Bool
+        var bookmarks: [Int]?
     }
 
     private struct SessionState: Codable {
@@ -677,7 +706,9 @@ final class AppState: ObservableObject {
                                    encoding: d.encoding,
                                    eol: d.lineEnding,
                                    language: d.languageIsManual ? d.language : nil,
-                                   dirty: d.isDirty)
+                                   dirty: d.isDirty,
+                                   bookmarks: d.lineMarkers.bookmarks.isEmpty
+                                       ? nil : d.lineMarkers.bookmarks.sorted())
             if d.isDirty {
                 let name = d.id.uuidString + ".txt"
                 let dest = Self.draftsDirectory.appendingPathComponent(name)
@@ -761,6 +792,7 @@ final class AppState: ObservableObject {
             if let document {
                 if entry.language != nil { document.languageIsManual = true }
                 document.pendingCursor = entry.cursor
+                document.lineMarkers.bookmarks = Set(entry.bookmarks ?? [])
                 documents.append(document)
                 if document.url != nil { startWatching(document) }
             }

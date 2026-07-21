@@ -197,3 +197,20 @@ final class Debouncer {
 
     func cancel() { workItem?.cancel() }
 }
+
+// MARK: - Line index lookup
+
+/// Binary search over a line-starts table (UTF-16 offsets). Shared by the
+/// ruler, status bar, and line-marker bookkeeping; lives here (not in an
+/// AppKit type) so Foundation-only code can use it.
+enum LineIndex {
+    /// Index of the line containing `offset` — the largest start <= offset.
+    static func of(_ offset: Int, in starts: [Int]) -> Int {
+        var lo = 0, hi = starts.count - 1
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2
+            if starts[mid] <= offset { lo = mid } else { hi = mid - 1 }
+        }
+        return lo
+    }
+}
