@@ -66,6 +66,10 @@ cp -R "$BUILD/export/$APP" "$DMG_STAGE/"
 ln -s /Applications "$DMG_STAGE/Applications"
 DMG="$BUILD/NoteClarity-$VERSION.dmg"
 hdiutil create -volname "NoteClarity" -srcfolder "$DMG_STAGE" -ov -format UDZO "$DMG" >/dev/null
+# hdiutil images are unsigned; give the DMG a Developer ID signature of its
+# own so the container has a verifiable origin (and the spctl open-context
+# check below can pass).
+codesign --force --sign "Developer ID Application" --timestamp "$DMG"
 # The DMG needs its own notarization record before it can be stapled — the
 # app's ticket doesn't transfer to the container (stapler fails with a
 # CloudKit "Record not found" otherwise).
