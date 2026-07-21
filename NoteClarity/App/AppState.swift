@@ -571,18 +571,23 @@ final class AppState: ObservableObject {
             }
             docs.append(entry)
         }
-        // Prune strays only after every live draft is rewritten, keyed off dirty
-        // membership — not off which writes succeeded this cycle — so a transient
-        // write failure never deletes a document's last-known-good backup.
-        pruneStrayDrafts(keeping: Set(documents.filter(\.isDirty).map { $0.id.uuidString + ".txt" }))
         let active = documents.firstIndex { $0.id == activeID } ?? 0
         let state = SessionState(docs: docs,
                                  activeIndex: active,
                                  sidebarVisible: sidebarVisible,
                                  rightPanelVisible: rightPanelVisible,
                                  bottomPanelVisible: bottomPanelVisible)
+        var sessionCommitted = false
         if let data = try? JSONEncoder().encode(state) {
-            try? data.write(to: Self.sessionURL, options: .atomic)
+            sessionCommitted = (try? data.write(to: Self.sessionURL, options: .atomic)) != nil
+        }
+        // Prune strays LAST, and only once the session state that stops
+        // referencing them is durably committed; keyed off dirty membership —
+        // not off which draft writes succeeded this cycle — so neither a
+        // transient draft-write failure nor a failed session commit can
+        // delete a backup something on disk still points to.
+        if sessionCommitted {
+            pruneStrayDrafts(keeping: Set(documents.filter(\.isDirty).map { $0.id.uuidString + ".txt" }))
         }
     }
 
