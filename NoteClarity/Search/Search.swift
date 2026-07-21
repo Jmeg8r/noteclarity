@@ -9,12 +9,16 @@ struct SearchOptions {
 }
 
 final class FindState: ObservableObject {
-    @Published var query = ""
+    @Published var query = "" { didSet { lastZeroLengthMatchLocation = nil } }
     @Published var replacement = ""
-    @Published var options = SearchOptions()
+    @Published var options = SearchOptions() { didSet { lastZeroLengthMatchLocation = nil } }
     @Published var message = ""
     /// Captured when "in selection" is enabled; kept in sync across replace-all.
     var scopeRange: NSRange?
+    /// Location of the zero-length match Find Next selected last time. Anchors
+    /// and lookarounds (`^`, `$`, `\b`, …) leave the caret exactly on their
+    /// match, which would re-match forever without this breadcrumb (P2-06).
+    var lastZeroLengthMatchLocation: Int?
 }
 
 enum SearchEngine {
@@ -26,6 +30,26 @@ enum SearchEngine {
         var flags: NSRegularExpression.Options = [.anchorsMatchLines]
         if !options.caseSensitive { flags.insert(.caseInsensitive) }
         return try NSRegularExpression(pattern: pattern, options: flags)
+    }
+
+    /// Pure next/previous-match selection over precomputed match ranges, with
+    /// wrap-around. `afterZeroLengthAt` is where the caller last selected a
+    /// zero-length match; forward search steps at least one composed character
+    /// past it (never splitting a surrogate pair) instead of re-matching.
+    static func nextMatch(in matches: [NSRange], caret: NSRange, backwards: Bool,
+                          afterZeroLengthAt: Int?, text: NSString) -> NSRange? {
+        guard !matches.isEmpty else { return nil }
+        if backwards {
+            return matches.last { $0.location < caret.location } ?? matches.last!
+        }
+        var from = caret.location
+        if caret.length > 0 {
+            from += 1
+        } else if let zero = afterZeroLengthAt, zero == caret.location {
+            guard from < text.length else { return matches.first }   // wrap from EOF
+            from = NSMaxRange(text.rangeOfComposedCharacterSequence(at: from))
+        }
+        return matches.first { $0.location >= from } ?? matches.first!
     }
 }
 
@@ -74,15 +98,14 @@ extension AppState {
             return
         }
         let caret = c.textView.selectedRange()
-        let target: NSTextCheckingResult
-        if backwards {
-            target = matches.last { $0.range.location < caret.location } ?? matches.last!
-        } else {
-            let from = caret.length > 0 ? caret.location + 1 : caret.location
-            target = matches.first { $0.range.location >= from } ?? matches.first!
-        }
-        c.jump(to: target.range.location, length: target.range.length)
-        let index = matches.firstIndex { $0.range == target.range } ?? 0
+        guard let target = SearchEngine.nextMatch(in: matches.map(\.range),
+                                                  caret: caret,
+                                                  backwards: backwards,
+                                                  afterZeroLengthAt: findState.lastZeroLengthMatchLocation,
+                                                  text: c.text as NSString) else { return }
+        findState.lastZeroLengthMatchLocation = target.length == 0 ? target.location : nil
+        c.jump(to: target.location, length: target.length)
+        let index = matches.firstIndex { $0.range == target } ?? 0
         findState.message = "\(index + 1) of \(matches.count)"
     }
 
