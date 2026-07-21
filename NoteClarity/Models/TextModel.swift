@@ -17,21 +17,56 @@ enum FileEncoding: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// Decodes file data, returning the text and the detected encoding.
+    /// One decoded file plus everything the caller needs to be honest about it.
+    /// This layer never hides a problem (P1-04): replacement/fallback decoding
+    /// is reported, not silently returned as clean text.
+    struct DecodedFile {
+        var text: String
+        var encoding: FileEncoding
+        /// The bytes broke the encoding they declared (bad BOM body, malformed
+        /// sequences). The text was recovered via a byte-preserving fallback or
+        /// replacement characters — the caller must warn before any save.
+        var hadDecodingErrors: Bool
+        /// NUL/control-density heuristic: probably not a text file at all.
+        var looksBinary: Bool
+    }
+
+    /// Decodes file data with full diagnostics.
     /// Detection order: BOM sniffing, strict UTF-8, NUL-byte heuristic for
     /// BOM-less UTF-16, then ISO-8859-1 as the never-fails fallback.
-    static func decode(_ data: Data) -> (text: String, encoding: FileEncoding) {
+    ///
+    /// Failure semantics: when a BOM promises an encoding the bytes then break,
+    /// the payload is decoded as ISO-8859-1 (a bijective byte↔char mapping, so
+    /// an untouched buffer still round-trips the original bytes exactly) and
+    /// `hadDecodingErrors` is set. Nothing is ever returned as an empty string
+    /// because decoding failed.
+    static func decode(_ data: Data) -> DecodedFile {
         if data.starts(with: [0xEF, 0xBB, 0xBF]) {
-            return (String(decoding: data.dropFirst(3), as: UTF8.self), .utf8bom)
+            let body = data.dropFirst(3)
+            if let s = String(data: body, encoding: .utf8) {
+                return DecodedFile(text: s, encoding: .utf8bom,
+                                   hadDecodingErrors: false, looksBinary: looksBinary(data))
+            }
+            return DecodedFile(text: String(decoding: body, as: UTF8.self), encoding: .utf8bom,
+                               hadDecodingErrors: true, looksBinary: looksBinary(data))
         }
         if data.starts(with: [0xFF, 0xFE]) {
-            return (String(data: data.dropFirst(2), encoding: .utf16LittleEndian) ?? "", .utf16le)
+            if let s = String(data: data.dropFirst(2), encoding: .utf16LittleEndian) {
+                return DecodedFile(text: s, encoding: .utf16le,
+                                   hadDecodingErrors: false, looksBinary: false)
+            }
+            return latin1Fallback(data, hadDecodingErrors: true)
         }
         if data.starts(with: [0xFE, 0xFF]) {
-            return (String(data: data.dropFirst(2), encoding: .utf16BigEndian) ?? "", .utf16be)
+            if let s = String(data: data.dropFirst(2), encoding: .utf16BigEndian) {
+                return DecodedFile(text: s, encoding: .utf16be,
+                                   hadDecodingErrors: false, looksBinary: false)
+            }
+            return latin1Fallback(data, hadDecodingErrors: true)
         }
         if let s = String(data: data, encoding: .utf8) {
-            return (s, .utf8)
+            return DecodedFile(text: s, encoding: .utf8,
+                               hadDecodingErrors: false, looksBinary: looksBinary(data))
         }
         if data.count >= 4 {
             let sample = data.prefix(1024)
@@ -41,29 +76,69 @@ enum FileEncoding: String, Codable, CaseIterable, Identifiable {
             }
             let quarter = max(1, sample.count / 4)
             if oddZeros >= quarter, let s = String(data: data, encoding: .utf16LittleEndian) {
-                return (s, .utf16le)
+                return DecodedFile(text: s, encoding: .utf16le,
+                                   hadDecodingErrors: false, looksBinary: false)
             }
             if evenZeros >= quarter, let s = String(data: data, encoding: .utf16BigEndian) {
-                return (s, .utf16be)
+                return DecodedFile(text: s, encoding: .utf16be,
+                                   hadDecodingErrors: false, looksBinary: false)
             }
         }
-        return (String(data: data, encoding: .isoLatin1) ?? "", .latin1)
+        return latin1Fallback(data, hadDecodingErrors: false)
     }
 
-    /// Encodes text for writing, prepending the BOM where the encoding requires one.
-    /// The LE/BE Foundation encodings do not emit a BOM on their own.
-    func encode(_ string: String) -> Data {
+    private static func latin1Fallback(_ data: Data, hadDecodingErrors: Bool) -> DecodedFile {
+        DecodedFile(text: String(data: data, encoding: .isoLatin1) ?? "",
+                    encoding: .latin1,
+                    hadDecodingErrors: hadDecodingErrors,
+                    looksBinary: looksBinary(data))
+    }
+
+    /// Text-vs-binary heuristic over the leading bytes: any NUL, or a dense run
+    /// of non-whitespace C0 control bytes, reads as binary. Only meaningful for
+    /// byte-oriented encodings — UTF-16 legitimately contains NULs.
+    static func looksBinary(_ data: Data) -> Bool {
+        guard !data.isEmpty else { return false }
+        let sample = data.prefix(8192)
+        var controls = 0
+        for byte in sample {
+            if byte == 0 { return true }
+            // Tab/LF/CR/FF and ESC (ANSI logs) are ordinary in text files.
+            if byte < 0x20, byte != 0x09, byte != 0x0A, byte != 0x0D, byte != 0x0C, byte != 0x1B {
+                controls += 1
+            }
+        }
+        return controls * 10 > sample.count
+    }
+
+    /// Exact encoding or nil — this layer is never silently lossy (P1-04).
+    /// The BOM is prepended where the encoding requires one; the LE/BE
+    /// Foundation encodings do not emit a BOM on their own.
+    func encodeExact(_ string: String) -> Data? {
         switch self {
         case .utf8:
             return Data(string.utf8)
         case .utf8bom:
             return Data([0xEF, 0xBB, 0xBF]) + Data(string.utf8)
         case .utf16le:
-            return Data([0xFF, 0xFE]) + (string.data(using: .utf16LittleEndian) ?? Data())
+            guard let body = string.data(using: .utf16LittleEndian) else { return nil }
+            return Data([0xFF, 0xFE]) + body
         case .utf16be:
-            return Data([0xFE, 0xFF]) + (string.data(using: .utf16BigEndian) ?? Data())
+            guard let body = string.data(using: .utf16BigEndian) else { return nil }
+            return Data([0xFE, 0xFF]) + body
+        case .latin1:
+            return string.data(using: .isoLatin1, allowLossyConversion: false)
+        }
+    }
+
+    /// Lossy fallback for when the user has explicitly confirmed the
+    /// substitution of unmappable characters.
+    func encodeLossy(_ string: String) -> Data {
+        switch self {
         case .latin1:
             return string.data(using: .isoLatin1, allowLossyConversion: true) ?? Data(string.utf8)
+        default:
+            return encodeExact(string) ?? Data(string.utf8)
         }
     }
 }
