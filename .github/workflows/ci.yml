@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
 
+# Least privilege: nothing in this workflow writes to the repo (P3-03).
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -16,9 +20,20 @@ jobs:
     # (CreatedOnToolsVersion 16.0) and macos-latest now maps to a newer major.
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+
+      - name: Plugin contract checks
+        # The API declaration ships in two places (Plugins/ for the repo,
+        # BundledPlugins/ for the app seed) — they must be byte-identical, and
+        # every bundled plugin's TypeScript must typecheck against it (P3-01).
+        run: |
+          diff -u Plugins/noteclarity.d.ts BundledPlugins/noteclarity.d.ts
+          for src in BundledPlugins/*/src/main.ts; do
+            echo "typecheck $src"
+            npx -y -p typescript@5.5.4 tsc --noEmit --target ES2019 --lib es2019,dom "$src"
+          done
 
       - name: Select newest Xcode 16.x
         run: |
