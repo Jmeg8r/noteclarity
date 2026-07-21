@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Pinned image, not macos-latest: this project targets Xcode 16.x
+    # (CreatedOnToolsVersion 16.0) and macos-latest now maps to a newer major.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode 16.x
+        run: |
+          ls -d /Applications/Xcode*.app
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)/Contents/Developer"
+          xcodebuild -version
+
+      - name: Build (Debug)
+        run: >
+          xcodebuild build -project NoteClarity.xcodeproj -scheme NoteClarity
+          -configuration Debug -destination 'platform=macOS'
+          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+
+      - name: Build (Release)
+        run: >
+          xcodebuild build -project NoteClarity.xcodeproj -scheme NoteClarity
+          -configuration Release -destination 'platform=macOS'
+          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+
+      - name: Archive dry-run (unsigned)
+        run: >
+          xcodebuild archive -project NoteClarity.xcodeproj -scheme NoteClarity
+          -configuration Release -archivePath build/dryrun.xcarchive
+          -destination 'platform=macOS'
+          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
