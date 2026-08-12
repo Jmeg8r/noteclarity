@@ -37,8 +37,8 @@ jobs:
 
       - name: Select newest Xcode 16.x
         run: |
-          ls -d /Applications/Xcode*.app
-          sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)/Contents/Developer"
+          find /Applications -maxdepth 1 -name 'Xcode*.app'
+          sudo xcode-select -s "$(find /Applications -maxdepth 1 -name 'Xcode_16*.app' | sort -V | tail -1)/Contents/Developer"
           xcodebuild -version
 
       - name: Build (Debug)
