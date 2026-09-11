@@ -3,7 +3,7 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        UpdateChecker.shared.checkAutomaticallyIfDue()
+        if !AppProfile.isTesting { UpdateChecker.shared.checkAutomaticallyIfDue() }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

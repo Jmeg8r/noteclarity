@@ -30,7 +30,7 @@ final class UpdateChecker {
 
     func checkAutomaticallyIfDue() {
         guard AppSettings.shared.autoCheckForUpdates else { return }
-        let last = UserDefaults.standard.object(forKey: Self.lastCheckedKey) as? Date ?? .distantPast
+        let last = AppProfile.defaults.object(forKey: Self.lastCheckedKey) as? Date ?? .distantPast
         guard Date().timeIntervalSince(last) > Self.checkInterval else { return }
         perform(silent: true)
     }
@@ -68,7 +68,7 @@ final class UpdateChecker {
             return
         }
 
-        UserDefaults.standard.set(Date(), forKey: Self.lastCheckedKey)
+        AppProfile.defaults.set(Date(), forKey: Self.lastCheckedKey)
         if SemVer.isNewer(tag, than: localVersion) {
             alert(title: "NoteClarity \(tag) is available.",
                   body: "You are running \(localVersion).",

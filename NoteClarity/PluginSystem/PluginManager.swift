@@ -65,8 +65,8 @@ final class PluginManager: ObservableObject {
     // MARK: Persistence of enable state
 
     private var enabledMap: [String: Bool] {
-        get { UserDefaults.standard.dictionary(forKey: Self.enabledKey) as? [String: Bool] ?? [:] }
-        set { UserDefaults.standard.set(newValue, forKey: Self.enabledKey) }
+        get { AppProfile.defaults.dictionary(forKey: Self.enabledKey) as? [String: Bool] ?? [:] }
+        set { AppProfile.defaults.set(newValue, forKey: Self.enabledKey) }
     }
 
     private func setEnabledFlag(_ pluginID: String, _ on: Bool) {

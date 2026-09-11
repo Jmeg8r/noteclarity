@@ -28,6 +28,9 @@ final class PluginInstance {
     /// and activate() failures deterministic load errors instead of toasts (P2-04).
     private var loadPhaseException: String?
     private var isLoading = false
+    private var networkTasks: [UUID: URLSessionDataTask] = [:]
+    private let networkConfiguration: URLSessionConfiguration
+    private var networkSession: URLSession?
 
     private var storageCache: [String: Any]?
     private var storageURL: URL {
@@ -37,12 +40,13 @@ final class PluginInstance {
     }
 
     init(manifest: PluginManifest, directory: URL, mainURL: URL, granted: Set<String>,
-         manager: PluginManager) {
+         manager: PluginManager, networkConfiguration: URLSessionConfiguration = .ephemeral) {
         self.manifest = manifest
         self.directory = directory
         self.mainURL = mainURL
         self.granted = granted
         self.manager = manager
+        self.networkConfiguration = networkConfiguration
     }
 
     // MARK: Lifecycle
@@ -86,6 +90,7 @@ final class PluginInstance {
 
     private func failLoadIfScriptThrew(_ phase: String) throws {
         guard let message = loadPhaseException else { return }
+        cancelNetworkTasks()
         // Roll back anything the partial load registered before failing.
         for panel in panels.values { panel.teardown() }
         panels.removeAll()
@@ -102,12 +107,20 @@ final class PluginInstance {
         if let ctx = context, let deactivate = function(named: "deactivate", in: ctx) {
             deactivate.call(withArguments: [])
         }
+        cancelNetworkTasks()
         for panel in panels.values { panel.teardown() }
         panels.removeAll()
         commandCallbacks.removeAll()
         eventListeners.removeAll()
         dynamicMenuItems.removeAll()
         context = nil
+    }
+
+    private func cancelNetworkTasks() {
+        for task in networkTasks.values { task.cancel() }
+        networkTasks.removeAll()
+        networkSession?.invalidateAndCancel()
+        networkSession = nil
     }
 
     func dispatch(_ event: PluginEvent, _ payload: [String: Any]) {
@@ -144,7 +157,7 @@ final class PluginInstance {
     }
 
     private func has(_ permission: PluginPermission) -> Bool {
-        granted.contains(permission.rawValue)
+        context != nil && granted.contains(permission.rawValue)
     }
 
     /// Raises a JS exception in the plugin's context; JavaScriptCore surfaces it
@@ -277,15 +290,23 @@ final class PluginInstance {
         let setCursor: @convention(block) (Double) -> Void = { [weak self] offset in
             guard let self else { return }
             guard self.has(.editorWrite) else { self.deny(.editorWrite); return }
-            self.editor?.jump(to: Int(offset))
+            guard let position = Self.editorOffset(offset) else {
+                self.throwError("setCursor: offset must be a finite integer within the supported range")
+                return
+            }
+            self.editor?.jump(to: position)
         }
         set(editorAPI, "setCursor", setCursor)
 
         let insertAt: @convention(block) (Double, String) -> Void = { [weak self] offset, text in
             guard let self else { return }
             guard self.has(.editorWrite) else { self.deny(.editorWrite); return }
+            guard let position = Self.editorOffset(offset) else {
+                self.throwError("insertAt: offset must be a finite integer within the supported range")
+                return
+            }
             guard let ed = self.editor else { return }
-            let loc = max(0, min(Int(offset), ed.utf16Length))
+            let loc = max(0, min(position, ed.utf16Length))
             ed.replaceRangeUndoable(NSRange(location: loc, length: 0), with: text)
         }
         set(editorAPI, "insertAt", insertAt)
@@ -412,12 +433,14 @@ final class PluginInstance {
             let message = dict["message"] as? String ?? ""
             let buttons = (dict["buttons"] as? [String]).flatMap { $0.isEmpty ? nil : $0 } ?? ["OK"]
             return JSValue(newPromiseIn: ctx) { resolve, _ in
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
+                    guard self?.context === ctx else { return }
                     let alert = NSAlert()
                     alert.messageText = title
                     alert.informativeText = message
                     for label in buttons { alert.addButton(withTitle: label) }
                     let response = alert.runModal()
+                    guard self?.context === ctx else { return }
                     let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
                     resolve?.call(withArguments: [max(0, index)])
                 }
@@ -455,7 +478,9 @@ final class PluginInstance {
         let dispose: @convention(block) () -> Void = { [weak self, weak panel] in
             guard let self, let panel else { return }
             panel.teardown()
-            self.panels.removeValue(forKey: panel.panelID)
+            if self.panels[panel.panelID] === panel {
+                self.panels.removeValue(forKey: panel.panelID)
+            }
             self.manager.contributionsDidChange()
         }
         set(handle, "dispose", dispose)
@@ -500,14 +525,23 @@ final class PluginInstance {
         let get: @convention(block) (String) -> Any = { [weak self] key in
             guard let self else { return NSNull() }
             guard self.has(.storage) else { self.deny(.storage); return NSNull() }
-            return self.loadedStorage()[key] ?? NSNull()
+            do { return try self.loadedStorage()[key] ?? NSNull() }
+            catch {
+                self.throwError("storage.get: could not read (\(error.localizedDescription))")
+                return NSNull()
+            }
         }
         set(storageAPI, "get", get)
 
         let setValue: @convention(block) (String, JSValue) -> Void = { [weak self] key, value in
             guard let self else { return }
             guard self.has(.storage) else { self.deny(.storage); return }
-            var cache = self.loadedStorage()
+            var cache: [String: Any]
+            do { cache = try self.loadedStorage() }
+            catch {
+                self.throwError("storage.set: could not read existing storage (\(error.localizedDescription))")
+                return
+            }
             if value.isUndefined || value.isNull {
                 cache.removeValue(forKey: key)
             } else {
@@ -519,9 +553,9 @@ final class PluginInstance {
                 }
                 cache[key] = object
             }
-            self.storageCache = cache
             do {
-                try self.persistStorage()
+                try self.persistStorage(cache)
+                self.storageCache = cache
             } catch {
                 // A silently failed write would let the plugin believe the
                 // value is durable (P2-07) — surface it to the caller.
@@ -533,28 +567,28 @@ final class PluginInstance {
         return storageAPI
     }
 
-    private func loadedStorage() -> [String: Any] {
+    private func loadedStorage() throws -> [String: Any] {
         if let cached = storageCache { return cached }
-        var loaded: [String: Any] = [:]
-        if let data = try? Data(contentsOf: storageURL) {
-            if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                loaded = object
-            } else {
-                // Malformed is not the same as absent (P2-07): quarantine the
-                // bytes instead of silently overwriting them on the next set.
-                let quarantine = storageURL.appendingPathExtension("corrupt")
-                try? FileManager.default.removeItem(at: quarantine)
-                try? FileManager.default.moveItem(at: storageURL, to: quarantine)
-                NSLog("[NoteClarity] plugin %@ storage was malformed; moved to %@",
-                      manifest.id, quarantine.lastPathComponent)
-            }
+        let data: Data
+        do { data = try Data(contentsOf: storageURL) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            storageCache = [:]
+            return [:]
         }
-        storageCache = loaded
-        return loaded
+        if let loaded = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            storageCache = loaded
+            return loaded
+        }
+        // Preserve every damaged generation. If preservation fails, reads and
+        // writes fail closed instead of treating unreadable storage as empty.
+        let quarantine = storageURL.appendingPathExtension("corrupt-\(UUID().uuidString)")
+        try FileManager.default.moveItem(at: storageURL, to: quarantine)
+        manager.host?.pluginToast("Plugin \(manifest.name) storage was damaged; preserved as \(quarantine.lastPathComponent).")
+        storageCache = [:]
+        return [:]
     }
 
-    private func persistStorage() throws {
-        guard let cache = storageCache else { return }
+    private func persistStorage(_ cache: [String: Any]) throws {
         let data = try JSONSerialization.data(withJSONObject: cache, options: [.sortedKeys])
         try data.write(to: storageURL, options: .atomic)
     }
@@ -609,6 +643,7 @@ final class PluginInstance {
                     return
                 }
                 var request = URLRequest(url: url)
+                request.timeoutInterval = 30
                 request.httpMethod = dict["method"] as? String ?? "GET"
                 if let headers = dict["headers"] as? [String: String] {
                     for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
@@ -616,8 +651,15 @@ final class PluginInstance {
                 if let body = dict["body"] as? String {
                     request.httpBody = Data(body.utf8)
                 }
-                let task = URLSession.shared.dataTask(with: request) { data, response, error in
-                    DispatchQueue.main.async {
+                let requestID = UUID()
+                if self.networkSession == nil {
+                    self.networkSession = URLSession(configuration: self.networkConfiguration,
+                                                     delegate: PluginNetworkDelegate(), delegateQueue: nil)
+                }
+                let task = self.networkSession!.dataTask(with: request) { [weak self] data, response, error in
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.context === ctx,
+                              self.networkTasks.removeValue(forKey: requestID) != nil else { return }
                         if let error {
                             reject?.call(withArguments: [error.localizedDescription])
                             return
@@ -627,6 +669,7 @@ final class PluginInstance {
                         resolve?.call(withArguments: [["status": status, "body": body]])
                     }
                 }
+                self.networkTasks[requestID] = task
                 task.resume()
             }
         }
@@ -645,5 +688,19 @@ final class PluginInstance {
         default:
             return false
         }
+    }
+
+    static func editorOffset(_ value: Double) -> Int? { Int(exactly: value) }
+}
+
+/// Redirects must satisfy the same scheme policy as the original request.
+/// Each plugin uses an ephemeral session rather than the application's shared
+/// cookie, credential and disk-cache stores.
+private final class PluginNetworkDelegate: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(request.url.map(PluginInstance.isAllowedFetchURL) == true ? request : nil)
     }
 }

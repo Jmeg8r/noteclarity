@@ -76,7 +76,7 @@ final class AppSettings: ObservableObject {
         // `settings = AppSettings.shared` guarantees this runs before
         // AppState.init touches recents or plugin maps.
         DefaultsMigration.runOnce()
-        let d = UserDefaults.standard
+        let d = AppProfile.defaults
         appearance = AppearanceMode(rawValue: d.string(forKey: K.appearance) ?? "") ?? .system
         useSystemAccent = d.object(forKey: K.useSystemAccent) as? Bool ?? false
         fontName = d.string(forKey: K.fontName) ?? ""
@@ -94,7 +94,7 @@ final class AppSettings: ObservableObject {
     }
 
     private func save() {
-        let d = UserDefaults.standard
+        let d = AppProfile.defaults
         d.set(appearance.rawValue, forKey: K.appearance)
         d.set(useSystemAccent, forKey: K.useSystemAccent)
         d.set(fontName, forKey: K.fontName)

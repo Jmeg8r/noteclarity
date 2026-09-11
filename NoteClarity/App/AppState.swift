@@ -116,13 +116,13 @@ final class AppState: ObservableObject {
     private static let recentsKey = "nc.recentFiles"
 
     private init() {
-        recentFiles = UserDefaults.standard.stringArray(forKey: Self.recentsKey) ?? []
+        recentFiles = AppProfile.defaults.stringArray(forKey: Self.recentsKey) ?? []
         settings.apply()
         plugins.host = self
         settingsSink = settings.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { self?.applySettingsToEditors() }
         }
-        plugins.loadAll()
+        if !AppProfile.isTesting { plugins.loadAll() }
         restoreSession()
         if documents.isEmpty { newDocument() }
         // Backstop for the kqueue watchers: files changed while the app was
@@ -135,27 +135,7 @@ final class AppState: ObservableObject {
 
     // MARK: Support directories
 
-    static var supportDirectory: URL = {
-        // Testing seam: headless verification runs point this at a scratch
-        // directory so they never collide with the real session (a HOME
-        // override does not redirect applicationSupportDirectory).
-        if let override = ProcessInfo.processInfo.environment["NOTECLARITY_SUPPORT_DIR"],
-           !override.isEmpty {
-            let dir = URL(fileURLWithPath: override, isDirectory: true)
-            // Deterministic test runs: FRESH wipes stale state from earlier
-            // runs. Only honored together with the override — it can never
-            // touch the real profile.
-            if ProcessInfo.processInfo.environment["NOTECLARITY_FRESH_SUPPORT"] == "1" {
-                try? FileManager.default.removeItem(at: dir)
-            }
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            return dir
-        }
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = base.appendingPathComponent("NoteClarity", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }()
+    static var supportDirectory: URL { AppProfile.supportDirectory }
 
     private static var draftsDirectory: URL = {
         let dir = supportDirectory.appendingPathComponent("Drafts", isDirectory: true)
@@ -224,7 +204,7 @@ final class AppState: ObservableObject {
 
     /// Files beyond this size are refused outright — everything past open is
     /// synchronous full-buffer TextKit work that would beachball the app.
-    static let openSizeLimit = 50_000_000
+    static let openSizeLimit = TextFileReader.sizeLimit
 
     /// Serial so multi-file opens finish in request order.
     private let openQueue = DispatchQueue(label: "nc.file-open", qos: .userInitiated)
@@ -245,7 +225,7 @@ final class AppState: ObservableObject {
         openQueue.async { [weak self] in
             let result: Result<FileEncoding.DecodedFile, Error>
             do {
-                result = .success(FileEncoding.decode(try Data(contentsOf: std)))
+                result = .success(FileEncoding.decode(try TextFileReader.read(std)))
             } catch {
                 result = .failure(error)
             }
@@ -493,7 +473,14 @@ final class AppState: ObservableObject {
             showToast("\(document.displayName) was deleted or moved.")
             scheduleSessionSave()
         case .modified:
-            guard let data = try? Data(contentsOf: url) else { return }
+            let data: Data
+            do { data = try TextFileReader.read(url) }
+            catch {
+                document.isDirty = true
+                showToast("Could not reload \(document.displayName): \(error.localizedDescription). Current buffer retained.")
+                scheduleSessionSave()
+                return
+            }
             let decoded = FileEncoding.decode(data)
             let diskEOL = LineEnding.detect(in: decoded.text, default: document.lineEnding)
             let diskText = LineEnding.normalizeToLF(decoded.text)
@@ -593,7 +580,7 @@ final class AppState: ObservableObject {
     // MARK: Edit plumbing
 
     private func documentEdited(_ document: Document) {
-        if !document.isDirty { document.isDirty = true }
+        scheduleSessionSave()
         guard document.id == activeID else { return }
         refreshStatus()
         highlightDebouncer.call { [weak self] in
@@ -607,7 +594,6 @@ final class AppState: ObservableObject {
             self.emitDocumentEvent(.documentChanged, d)
         }
         document.controller?.scheduleWordCacheRebuild()   // self-gates on the setting
-        scheduleSessionSave()
     }
 
     private func selectionChanged() {
@@ -641,11 +627,13 @@ final class AppState: ObservableObject {
         guard let c = activeController, let regex = Self.wordRegex else { return }
         let snapshot = c.text
         let docID = activeID
+        let generation = c.generation
         DispatchQueue.global(qos: .utility).async {
             let count = regex.numberOfMatches(in: snapshot, options: [],
                                               range: NSRange(location: 0, length: (snapshot as NSString).length))
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.activeID == docID else { return }
+                guard let self, self.activeID == docID,
+                      self.activeController?.generation == generation else { return }
                 self.lastWordCount = count
                 self.status.words = count
             }
@@ -660,10 +648,13 @@ final class AppState: ObservableObject {
         let snapshot = c.text
         let language = d.language
         let docID = d.id
+        let generation = c.generation
         DispatchQueue.global(qos: .utility).async {
             let found = LanguageRules.extractSymbols(from: snapshot, language: language)
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.activeID == docID else { return }
+                guard let self, self.activeID == docID,
+                      self.activeDocument?.language == language,
+                      self.activeController?.generation == generation else { return }
                 self.symbols = found
             }
         }
@@ -746,12 +737,12 @@ final class AppState: ObservableObject {
         var r = recentFiles.filter { $0 != url.path }
         r.insert(url.path, at: 0)
         recentFiles = Array(r.prefix(12))
-        UserDefaults.standard.set(recentFiles, forKey: Self.recentsKey)
+        AppProfile.defaults.set(recentFiles, forKey: Self.recentsKey)
     }
 
     func clearRecents() {
         recentFiles = []
-        UserDefaults.standard.set(recentFiles, forKey: Self.recentsKey)
+        AppProfile.defaults.set(recentFiles, forKey: Self.recentsKey)
     }
 
     // MARK: Toasts
@@ -808,8 +799,11 @@ final class AppState: ObservableObject {
     /// Debounced saves run every couple of seconds — persistence failures toast
     /// once per transition into the failing state, not per attempt (P2-07).
     private var sessionPersistenceFailing = false
+    private var sessionPersistenceBlocked = false
+    private let draftBackups = DraftBackups(directory: AppState.draftsDirectory)
 
     func saveSession() {
+        guard !sessionPersistenceBlocked else { return }
         try? FileManager.default.createDirectory(at: Self.draftsDirectory, withIntermediateDirectories: true)
         var failures: [String] = []
         var docs: [SessionDoc] = []
@@ -831,7 +825,7 @@ final class AppState: ObservableObject {
                 let name = d.id.uuidString + ".txt"
                 let dest = Self.draftsDirectory.appendingPathComponent(name)
                 do {
-                    try text.write(to: dest, atomically: true, encoding: .utf8)
+                    try draftBackups.write(text, named: name)
                     entry.draft = name
                 } catch {
                     failures.append("draft for \(d.displayName): \(error.localizedDescription)")
@@ -844,7 +838,7 @@ final class AppState: ObservableObject {
             }
             docs.append(entry)
         }
-        let active = documents.firstIndex { $0.id == activeID } ?? 0
+        let active = docs.firstIndex { $0.id == activeID } ?? 0
         let state = SessionState(docs: docs,
                                  activeIndex: active,
                                  sidebarVisible: sidebarVisible,
@@ -864,7 +858,8 @@ final class AppState: ObservableObject {
         // transient draft-write failure nor a failed session commit can
         // delete a backup something on disk still points to.
         if sessionCommitted {
-            pruneStrayDrafts(keeping: Set(documents.filter(\.isDirty).map { $0.id.uuidString + ".txt" }))
+            do { try draftBackups.prune(keeping: Set(docs.compactMap(\.draft))) }
+            catch { failures.append("draft cleanup: \(error.localizedDescription)") }
         }
         if failures.isEmpty {
             sessionPersistenceFailing = false
@@ -877,34 +872,33 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func pruneStrayDrafts(keeping expected: Set<String>) {
-        guard let items = try? FileManager.default.contentsOfDirectory(at: Self.draftsDirectory,
-                                                                       includingPropertiesForKeys: nil) else { return }
-        for item in items where !expected.contains(item.lastPathComponent) {
-            try? FileManager.default.removeItem(at: item)
-        }
-    }
-
     private func restoreSession() {
         guard FileManager.default.fileExists(atPath: Self.sessionURL.path) else { return }
-        guard let data = try? Data(contentsOf: Self.sessionURL),
-              let state = try? JSONDecoder().decode(SessionState.self, from: data)
-        else {
+        guard let data = try? Data(contentsOf: Self.sessionURL) else {
+            sessionPersistenceBlocked = true
+            showToast("Previous session could not be read. Session backups are paused to preserve it.")
+            return
+        }
+        guard let state = try? JSONDecoder().decode(SessionState.self, from: data) else {
             // Malformed is not the same as absent (P2-07): quarantine the bytes
             // for post-mortem instead of silently starting fresh over them.
-            let quarantine = Self.sessionURL.appendingPathExtension("corrupt")
-            try? FileManager.default.removeItem(at: quarantine)
-            try? FileManager.default.moveItem(at: Self.sessionURL, to: quarantine)
-            NSLog("[NoteClarity] session.json was unreadable; moved aside as %@",
-                  quarantine.lastPathComponent)
-            showToast("Previous session was unreadable — moved aside as \(quarantine.lastPathComponent).")
+            let quarantine = Self.sessionURL.appendingPathExtension("corrupt-\(UUID().uuidString)")
+            do {
+                try FileManager.default.moveItem(at: Self.sessionURL, to: quarantine)
+                showToast("Previous session was unreadable — preserved as \(quarantine.lastPathComponent). Drafts are retained for recovery.")
+            } catch {
+                sessionPersistenceBlocked = true
+                showToast("Previous session could not be preserved. Session backups are paused to protect it.")
+            }
             return
         }
 
         for entry in state.docs {
             var document: Document?
-            let draftText: String? = entry.draft.flatMap {
-                try? String(contentsOf: Self.draftsDirectory.appendingPathComponent($0), encoding: .utf8)
+            var draftText: String?
+            if let name = entry.draft {
+                do { draftText = try draftBackups.read(name) }
+                catch { showToast("Could not restore draft \(name). Existing draft files are retained for recovery.") }
             }
             if let draft = draftText {
                 let url = entry.path.map { URL(fileURLWithPath: $0) }
@@ -917,7 +911,10 @@ final class AppState: ObservableObject {
                 document?.isDirty = true
             } else if let path = entry.path {
                 let url = URL(fileURLWithPath: path)
-                guard let data = try? Data(contentsOf: url) else { continue }
+                guard let data = try? TextFileReader.read(url) else {
+                    showToast("Could not reopen \(url.lastPathComponent). Existing drafts are retained for recovery.")
+                    continue
+                }
                 let decoded = FileEncoding.decode(data)
                 if decoded.hadDecodingErrors {
                     showToast("\(url.lastPathComponent) contained bytes invalid in its declared encoding — recovered as \(decoded.encoding.displayName).")

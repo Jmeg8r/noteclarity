@@ -22,7 +22,8 @@ enum DefaultsMigration {
     ]
 
     static func runOnce() {
-        let standard = UserDefaults.standard
+        guard !AppProfile.isIsolated else { return }
+        let standard = AppProfile.defaults
         guard !standard.bool(forKey: migratedKey) else { return }
         defer { standard.set(true, forKey: migratedKey) }
         // Reading another bundle id's domain works for unsandboxed apps.

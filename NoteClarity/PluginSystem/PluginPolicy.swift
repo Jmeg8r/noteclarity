@@ -184,12 +184,12 @@ struct PluginGrant: Equatable {
 /// identity the user approved. UserDefaults-backed; the suite is injectable so
 /// tests never touch the real domain.
 final class PluginGrantStore {
-    private let defaults: UserDefaults
+    private let defaults: PreferencesStore
     private static let v2Key = "nc.plugin.grants.v2"
     /// Pre-identity grants ("nc.plugin.grants", [id: [permission]]).
     static let legacyKey = "nc.plugin.grants"
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: PreferencesStore = AppProfile.defaults) {
         self.defaults = defaults
     }
 
