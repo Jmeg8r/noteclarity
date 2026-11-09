@@ -89,7 +89,9 @@ session writes pause for that run and the app explains why. The editor's
 ```
 NoteClarity/
 ├── App/            NoteClarityApp (scenes, menus), AppDelegate, AppState (hub), AppSettings,
-│                   FileWatcher, UpdateChecker, DefaultsMigration, Typography
+│                   AppProfile (settings/data profile selection), DraftBackups, TextFileReader
+│                   (bounded open/reload reads), FileWatcher, UpdateChecker, DefaultsMigration,
+│                   Typography
 ├── Models/         TextModel (FileEncoding, LineEnding, Language, Debouncer, SemVer, WordCompletion),
 │                   LineMarkers (bookmarks + change bars)
 ├── Editor/         CodeTextView (TextKit 2 NSTextView), EditorController (per-tab stack),
