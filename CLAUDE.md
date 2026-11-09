@@ -10,8 +10,9 @@ Log. In QA mode, flag any code that doesn't match DESIGN.md.
 ## 2. Verification
 Headless verification uses the `NOTECLARITY_SUPPORT_DIR` and
 `NOTECLARITY_UPDATE_API` env seams so test runs never touch the real session
-or live instance. Those seams do not cover `UserDefaults`: the test host uses the
-production bundle id, so a test run writes the real defaults domain (see section 4).
+or live instance. `UserDefaults` is isolated by bundle id instead: `Scripts/test.sh`
+gives the test host a per-run `NOTECLARITY_BUNDLE_ID`, so run tests through it (see
+section 4).
 See `learnings/` for the established techniques.
 
 ## 3. Standards
@@ -60,13 +61,10 @@ against these bullets, read from `main`'s copy of this file.
   that adds anything else there.
 - **Xcode build and tests are a required local check.** The forge has no macOS runner.
   A PR that touches app code, tests, the Xcode project or bundled plugins runs
-  `xcodebuild test -project NoteClarity.xcodeproj -scheme NoteClarity -destination
-  'platform=macOS' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO` locally before merge
-  and posts the result on the PR.
-- **Protect the real defaults during a local test run.** Until the test host gets its own
-  bundle id, wrap the run in `defaults export com.jmeg8r.noteclarity <backup.plist>` and
-  `defaults import com.jmeg8r.noteclarity <backup.plist>`; seeding otherwise re-enables
-  bundled plugins in the real profile.
+  `bash Scripts/test.sh` locally before merge and posts the result on the PR.
+- **Run tests only through `Scripts/test.sh`.** It gives the test host a per-run bundle
+  id; a bare `xcodebuild test` uses the production bundle id and writes the real defaults
+  domain, where seeding re-enables bundled plugins in the real profile.
 - **GitHub backstop.** The forge push-mirrors `main` to GitHub, where
   `.github/workflows/ci.yml` builds, tests and archive-dry-runs on `macos-15` after merge.
   Check that run at the merge SHA; it is a backstop, not a merge gate.
