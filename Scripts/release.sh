@@ -13,6 +13,7 @@ cd "$(dirname "$0")/.."
 
 : "${DEVELOPMENT_TEAM:?Set DEVELOPMENT_TEAM to your Apple Developer Team ID (never commit it)}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-NoteClarityRelease}"
+RELEASE_REPO="Jmeg8r/noteclarity"
 PUBLISH=false
 [[ "${1:-}" == "--publish" ]] && PUBLISH=true
 
@@ -31,6 +32,11 @@ HEAD_SHA=$(git rev-parse HEAD)
 git merge-base --is-ancestor "$HEAD_SHA" origin/main \
     || { echo "ERROR: HEAD ($HEAD_SHA) is not on origin/main — releases build only published main history."; exit 1; }
 echo "Source: clean tree at $HEAD_SHA (on origin/main)"
+# origin may be the private Forge mirror. The public release must refer to
+# these exact source bytes in the repository that will host the release.
+PUBLISHED_SHA=$(gh api "repos/$RELEASE_REPO/commits/$HEAD_SHA" --jq .sha)
+[[ "$PUBLISHED_SHA" == "$HEAD_SHA" ]] \
+    || { echo "ERROR: source commit is not available in $RELEASE_REPO."; exit 1; }
 
 VERSION=$(xcodebuild -showBuildSettings -project NoteClarity.xcodeproj -scheme NoteClarity \
     -configuration Release 2>/dev/null | awk '/ MARKETING_VERSION /{print $3}')
@@ -38,8 +44,9 @@ VERSION=$(xcodebuild -showBuildSettings -project NoteClarity.xcodeproj -scheme N
 echo "Version: $VERSION"
 # Check the REMOTE for the tag too — `git fetch origin main` does not bring
 # tags down, so a local-only check can miss an already-published release.
+REMOTE_TAG=$(git ls-remote --tags "https://github.com/$RELEASE_REPO.git" "refs/tags/v$VERSION")
 if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null \
-    || [[ -n "$(git ls-remote --tags origin "refs/tags/v$VERSION")" ]]; then
+    || [[ -n "$REMOTE_TAG" ]]; then
     echo "ERROR: tag v$VERSION already exists — bump MARKETING_VERSION first."; exit 1
 fi
 
@@ -102,8 +109,8 @@ echo "DMG ready: $DMG"
 
 if $PUBLISH; then
     echo "== Publish GitHub release v$VERSION =="
-    gh release create "v$VERSION" "$DMG" "$DMG.sha256" --repo Jmeg8r/noteclarity \
-        --title "NoteClarity $VERSION" --generate-notes
+    gh release create "v$VERSION" "$DMG" "$DMG.sha256" --repo "$RELEASE_REPO" \
+        --target "$HEAD_SHA" --title "NoteClarity $VERSION" --generate-notes
 else
     echo "Dry run complete. Re-run with --publish to create the GitHub release."
 fi

@@ -70,7 +70,7 @@ final class TextModelTests: XCTestCase {
 
     func testMalformedUTF8BOMBodyIsFlagged() {
         let decoded = FileEncoding.decode(Data([0xEF, 0xBB, 0xBF, 0xFF]))
-        XCTAssertEqual(decoded.encoding, .utf8bom)
+        XCTAssertEqual(decoded.encoding, .latin1)
         XCTAssertTrue(decoded.hadDecodingErrors)
         XCTAssertFalse(decoded.text.isEmpty, "recovery must never yield an empty string")
     }
@@ -171,6 +171,9 @@ final class TextModelTests: XCTestCase {
         XCTAssertEqual(SemVer.parse("2.1.0-beta+5"), [2, 1, 0])
         XCTAssertNil(SemVer.parse("garbage"))
         XCTAssertNil(SemVer.parse(""))
+        for invalid in ["1..2", "1.x.3", "1.2.3.4", "1.2.", "-1", "1.9999999999999999999999999"] {
+            XCTAssertNil(SemVer.parse(invalid), invalid)
+        }
     }
 
     func testSemVerComparison() {

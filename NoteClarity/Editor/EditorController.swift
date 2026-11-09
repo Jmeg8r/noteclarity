@@ -24,6 +24,7 @@ final class EditorController: NSObject {
     private(set) var lineStarts: [Int] = [0]
     /// Bumped on every character edit; guards stale async highlight results.
     private(set) var generation = 0
+    private var highlightRequest = 0
 
     var onEdit: (() -> Void)?
     var onSelectionChange: (() -> Void)?
@@ -293,6 +294,8 @@ final class EditorController: NSObject {
     // MARK: Highlighting
 
     func highlightNow() {
+        highlightRequest += 1
+        let request = highlightRequest
         guard utf16Length <= Self.highlightSizeLimit else {
             applySpans([])
             return
@@ -303,7 +306,7 @@ final class EditorController: NSObject {
         DispatchQueue.global(qos: .userInitiated).async {
             let spans = HighlighterRegistry.highlighter(for: language).highlight(snapshot)
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.generation == gen else { return }
+                guard let self, self.generation == gen, self.highlightRequest == request else { return }
                 self.applySpans(spans)
             }
         }
@@ -345,6 +348,8 @@ extension EditorController: NSTextViewDelegate, NSTextStorageDelegate {
         // programmatic set, but the reaction below runs on the next runloop turn.
         let suppressed = suppressEditCallbacks
         if !suppressed {
+            // Save/close may run before the deferred presentation callback.
+            document.isDirty = true
             // Must run synchronously: lineStarts still holds PRE-edit offsets
             // here (recomputed only in the deferred block below), which is
             // exactly what the marker math needs. Mutating a plain struct is
@@ -360,10 +365,12 @@ extension EditorController: NSTextViewDelegate, NSTextStorageDelegate {
                                            newNewlines: newNewlines,
                                            newTextEndsWithNewline: endsWithNewline)
         }
-        // Deferred: mutating layout/attributes inside the edit pass is illegal.
+        // This is pure indexing, safe inside the edit pass. A second edit in
+        // the same run-loop needs the first edit's updated offsets.
+        recomputeLineStarts()
+        // Only presentation work is deferred; it may mutate layout/attributes.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.recomputeLineStarts()
             if !suppressed { self.onEdit?() }
         }
     }

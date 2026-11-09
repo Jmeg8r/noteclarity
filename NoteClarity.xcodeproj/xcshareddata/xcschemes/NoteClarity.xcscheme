@@ -28,6 +28,7 @@
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "NO">
       <EnvironmentVariables>
+         <EnvironmentVariable key = "NOTECLARITY_TEST_MODE" value = "1" isEnabled = "YES"/>
          <EnvironmentVariable
             key = "NOTECLARITY_SUPPORT_DIR"
             value = "/tmp/noteclarity-tests-support"
