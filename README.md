@@ -28,6 +28,26 @@ Command line equivalent:
 xcodebuild -project NoteClarity.xcodeproj -scheme NoteClarity -configuration Debug build
 ```
 
+Run automated tests with `bash Scripts/test.sh` (optional Xcode arguments, such
+as `-derivedDataPath /tmp/nc-derived`, follow the script name). It uses a unique
+test-host bundle identifier so AppKit preferences cannot collide with the
+installed app. The scheme selects a fresh child under `/tmp/noteclarity-tests-support`,
+keeps app preferences in that profile's `preferences.plist`, and suppresses
+automatic update checks and bundled plugin startup. Tests create synthetic
+plugins explicitly. Raw `xcodebuild test` with the production bundle identifier
+fails the profile-isolation assertion; use the script or supply a unique
+`NOTECLARITY_BUNDLE_ID` yourself.
+
+For other isolated verification, `NOTECLARITY_SUPPORT_DIR` moves settings,
+recents, grants, plugins and session data together. `NOTECLARITY_FRESH_SUPPORT=1`
+creates a unique child instead of deleting existing evidence. It never imports
+the old production defaults domain. Keep `NOTECLARITY_UPDATE_API` pointed at a
+local fixture when checking update behavior.
+
+Bundled plugin sources use TypeScript 5.5.4. After editing `src/main.ts`, run
+`bash Scripts/check-plugins.sh --write` to regenerate shipped JavaScript. CI
+runs the same script in check mode and rejects source/artifact drift.
+
 On first launch the app copies the three bundled plugins into
 `~/Library/Application Support/NoteClarity/Plugins/` and enables them. The Markdown
 Preview (right panel) and Document Statistics (bottom panel) open automatically;
@@ -55,22 +75,56 @@ JSON Formatter adds commands to the **Plugins** menu.
 | Theming | Light + Dark first-class via asset-catalog semantic colors; System/Light/Dark override in Settings, the View menu, and the toolbar; Notepad++-green accent (or follow the system accent) |
 | Plugins | JavaScriptCore extension host, WKWebView panels, permission gating, Plugin Manager UI — see below |
 
+Recovery files are deliberately retained: after a damaged session index,
+unreferenced or unreadable files in `Drafts/` remain available for manual
+recovery across later launches. Each damaged index gets a unique
+`session.json.corrupt-…` name. If it cannot be read or preserved, automatic
+session writes pause for that run and the app explains why. The editor's
+50 MB limit applies to opening, reloading and restoring on-disk files.
+
 ---
 
 ## Architecture
 
 ```
 NoteClarity/
-├── App/            NoteClarityApp (scenes, menus), AppDelegate, AppState (hub), AppSettings
-├── Models/         FileEncoding, LineEnding, Language, Debouncer
+├── App/            NoteClarityApp (scenes, menus), AppDelegate, AppState (hub), AppSettings,
+│                   AppProfile (settings/data profile selection), DraftBackups, TextFileReader
+│                   (bounded open/reload reads), FileWatcher, UpdateChecker, DefaultsMigration,
+│                   Typography
+├── Models/         TextModel (FileEncoding, LineEnding, Language, Debouncer, SemVer, WordCompletion),
+│                   LineMarkers (bookmarks + change bars)
 ├── Editor/         CodeTextView (TextKit 2 NSTextView), EditorController (per-tab stack),
 │                   LineNumberRulerView, EditorTheme (asset-catalog colors)
 ├── Highlighting/   SyntaxHighlighter protocol, RegexHighlighter, LanguageRules (+ symbols)
-├── Search/         SearchEngine + FindState + find/replace operations
+├── Search/         SearchEngine + find/replace operations (AppState extension)
 ├── UI/             MainWindowView, TabBarView, StatusBarView, FindBarView, SidebarView, SettingsView
 └── PluginSystem/   PluginManager, PluginInstance (JSContext bridge), PanelController (WKWebView),
+                    PluginPolicy (manifest validation, path containment, grant store),
                     PluginModels (manifest/permissions/events)
 ```
+
+```mermaid
+flowchart TD
+    UI[SwiftUI shell: UI/] --> AppState[AppState hub]
+    GH[GitHub releases] -->|UpdateChecker, weekly| AppState
+    AppState -->|one per tab| Editor[EditorController + CodeTextView]
+    Editor --> HL[Highlighting]
+    AppState --> Support[(Application Support: session, drafts, Plugins)]
+    AppState -->|events| PM[PluginManager]
+    PM -->|permission checks| Policy[PluginPolicy]
+    PM -->|messages| Panels[PanelController WKWebView]
+```
+
+<!-- archify:start -->
+### System map
+
+![System map](docs/diagrams/noteclarity.architecture.svg)
+
+Interactive: [`docs/diagrams/noteclarity.architecture.html`](docs/diagrams/noteclarity.architecture.html)
+— search, trace routes, compare roles. Source of truth is the typed IR
+[`noteclarity.architecture.json`](docs/diagrams/noteclarity.architecture.json); edit that, never the HTML.
+<!-- archify:end -->
 
 Key decisions:
 

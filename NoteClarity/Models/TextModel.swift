@@ -47,8 +47,7 @@ enum FileEncoding: String, Codable, CaseIterable, Identifiable {
                 return DecodedFile(text: s, encoding: .utf8bom,
                                    hadDecodingErrors: false, looksBinary: looksBinary(data))
             }
-            return DecodedFile(text: String(decoding: body, as: UTF8.self), encoding: .utf8bom,
-                               hadDecodingErrors: true, looksBinary: looksBinary(data))
+            return latin1Fallback(data, hadDecodingErrors: true)
         }
         if data.starts(with: [0xFF, 0xFE]) {
             // Foundation's UTF-16 decoder is lenient (odd-length bodies, lone
@@ -273,16 +272,20 @@ enum Language: String, Codable, CaseIterable, Identifiable {
 /// the standalone battery.
 enum SemVer {
     /// Parses "v2.1.0", "2.1", "2.1.0-beta+5" → [2,1,0] (missing components
-    /// are 0; prerelease/build suffixes ignored). Nil if the first component
-    /// isn't numeric.
+    /// are 0; prerelease/build suffixes ignored). Every supplied component
+    /// must be an unsigned decimal integer.
     static func parse(_ tag: String) -> [Int]? {
         var s = Substring(tag)
         if s.first == "v" || s.first == "V" { s = s.dropFirst() }
         let core = s.prefix { $0 != "-" && $0 != "+" }
         let parts = core.split(separator: ".", omittingEmptySubsequences: false)
-        guard let first = parts.first, let major = Int(first) else { return nil }
-        var out = [major]
-        for p in parts.dropFirst().prefix(2) { out.append(Int(p) ?? 0) }
+        guard (1...3).contains(parts.count) else { return nil }
+        var out: [Int] = []
+        for part in parts {
+            guard !part.isEmpty, part.utf8.allSatisfy({ (48...57).contains($0) }),
+                  let number = Int(part) else { return nil }
+            out.append(number)
+        }
         while out.count < 3 { out.append(0) }
         return out
     }

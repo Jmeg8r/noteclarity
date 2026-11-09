@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "NoteClarity System Map",
+    "output": "noteclarity.architecture.html",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "SwiftUI Shell",
+      "sublabel": "UI/ + NoteClarityApp",
+      "pos": [
+        40,
+        260
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "app",
+      "type": "backend",
+      "label": "AppState",
+      "sublabel": "documents, find, FileWatcher",
+      "pos": [
+        290,
+        260
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "tag": "single hub"
+    },
+    {
+      "id": "editor",
+      "type": "frontend",
+      "label": "EditorController",
+      "sublabel": "TextKit 2 NSTextView",
+      "pos": [
+        540,
+        260
+      ],
+      "size": [
+        160,
+        64
+      ]
+    },
+    {
+      "id": "hl",
+      "type": "backend",
+      "label": "Highlighting",
+      "sublabel": "RegexHighlighter",
+      "pos": [
+        800,
+        260
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "disk",
+      "type": "database",
+      "label": "Support Directory",
+      "sublabel": "session.json, drafts, Plugins/",
+      "pos": [
+        40,
+        480
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "plugins",
+      "type": "backend",
+      "label": "PluginManager",
+      "sublabel": "JSContext per plugin",
+      "pos": [
+        290,
+        480
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "policy",
+      "type": "security",
+      "label": "PluginPolicy",
+      "sublabel": "validation + grants",
+      "pos": [
+        540,
+        480
+      ],
+      "size": [
+        160,
+        64
+      ]
+    },
+    {
+      "id": "panels",
+      "type": "frontend",
+      "label": "PanelController",
+      "sublabel": "WKWebView panels",
+      "pos": [
+        290,
+        700
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "github",
+      "type": "external",
+      "label": "GitHub Releases",
+      "sublabel": "UpdateChecker, weekly",
+      "pos": [
+        290,
+        40
+      ],
+      "size": [
+        150,
+        64
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "github-app",
+      "from": "github",
+      "to": "app",
+      "label": "release feed",
+      "variant": "dashed",
+      "labelDy": 24
+    },
+    {
+      "id": "ui-app",
+      "from": "ui",
+      "to": "app",
+      "label": "actions"
+    },
+    {
+      "id": "app-editor",
+      "from": "app",
+      "to": "editor",
+      "label": "one per tab"
+    },
+    {
+      "id": "editor-hl",
+      "from": "editor",
+      "to": "hl",
+      "label": "spans"
+    },
+    {
+      "id": "app-disk",
+      "from": "app",
+      "to": "disk",
+      "label": "session",
+      "variant": "dashed"
+    },
+    {
+      "id": "app-plugins",
+      "from": "app",
+      "to": "plugins",
+      "label": "events",
+      "labelDy": 24
+    },
+    {
+      "id": "plugins-policy",
+      "from": "plugins",
+      "to": "policy",
+      "label": "permission checks",
+      "variant": "security"
+    },
+    {
+      "id": "plugins-panels",
+      "from": "plugins",
+      "to": "panels",
+      "label": "messages",
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Editing",
+      "items": [
+        "One EditorController per document",
+        "Buffer is LF internally; EOL applied on save"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Plugins",
+      "items": [
+        "Isolated JSContext per plugin",
+        "Grants bound to manifest + main.js digest"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Boundaries",
+      "items": [
+        "Panels load local HTML only without network",
+        "Only dependency is Apple system frameworks"
+      ]
+    }
+  ]
+}

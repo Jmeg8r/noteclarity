@@ -31,6 +31,7 @@ final class PanelController: NSObject, Identifiable {
     var id: String { pluginID + "." + panelID }
 
     private var loaded = false
+    private var disposed = false
     private var initialLoadApproved = false
     private var outgoingQueue: [String] = []
     var onMessageCallbacks: [JSValue] = []
@@ -74,7 +75,7 @@ final class PanelController: NSObject, Identifiable {
             // load before the block is attached. On compile failure we fail
             // CLOSED — a broken rule list must not silently open the network.
             Self.withRemoteBlockRuleList { [weak self] ruleList in
-                guard let self else { return }
+                guard let self, !self.disposed else { return }
                 guard let ruleList else {
                     NSLog("[NoteClarity] panel %@ refused: remote-block rule list failed to compile", self.id)
                     self.webView.loadHTMLString(
@@ -89,6 +90,7 @@ final class PanelController: NSObject, Identifiable {
     }
 
     func postToWebview(_ message: Any?) {
+        guard !disposed else { return }
         let payload = Self.jsonString(message ?? NSNull()) ?? "null"
         if loaded {
             evaluate(payload)
@@ -103,6 +105,11 @@ final class PanelController: NSObject, Identifiable {
     }
 
     func teardown() {
+        guard !disposed else { return }
+        disposed = true
+        loaded = false
+        outgoingQueue.removeAll()
+        webView.stopLoading()
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "noteclarity")
         webView.navigationDelegate = nil
         onMessageCallbacks.removeAll()
@@ -164,6 +171,7 @@ extension PanelController: WKNavigationDelegate {
     func webView(_ webView: WKWebView,
                  decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        guard !disposed else { decisionHandler(.cancel); return }
         // The one permitted in-panel navigation: the host's own loadHTMLString.
         if !initialLoadApproved,
            navigationAction.navigationType == .other,
@@ -183,6 +191,7 @@ extension PanelController: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard !disposed else { return }
         loaded = true
         let queued = outgoingQueue
         outgoingQueue.removeAll()
@@ -193,7 +202,7 @@ extension PanelController: WKNavigationDelegate {
 extension PanelController: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController,
                                didReceive message: WKScriptMessage) {
-        guard message.name == "noteclarity", instance?.context != nil else { return }
+        guard !disposed, message.name == "noteclarity", instance?.context != nil else { return }
         // Only the document we loaded may talk to the plugin: main frame,
         // local (file) origin. Anything else that somehow runs script does
         // not reach the bridge.
