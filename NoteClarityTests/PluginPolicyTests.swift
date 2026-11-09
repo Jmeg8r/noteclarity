@@ -177,9 +177,7 @@ final class PluginPolicyTests: XCTestCase {
     // MARK: Grant store
 
     func testGrantRoundTripAndRemoval() throws {
-        let suite = "nc.tests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = try ProfilePreferences(url: fixtureRoot.appendingPathComponent("preferences.plist"))
         let store = PluginGrantStore(defaults: defaults)
 
         XCTAssertNil(store.grant(for: "x"))
@@ -191,9 +189,7 @@ final class PluginPolicyTests: XCTestCase {
     }
 
     func testLegacyAdoptionConsumesV1Entry() throws {
-        let suite = "nc.tests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = try ProfilePreferences(url: fixtureRoot.appendingPathComponent("preferences.plist"))
         defaults.set(["old.plugin": ["editor.read"]], forKey: PluginGrantStore.legacyKey)
         let store = PluginGrantStore(defaults: defaults)
 

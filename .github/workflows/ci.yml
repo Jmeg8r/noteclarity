@@ -15,30 +15,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  plugin-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - run: bash Scripts/check-plugins.sh
+
   build:
     # Pinned image, not macos-latest: this project targets Xcode 16.x
     # (CreatedOnToolsVersion 16.0) and macos-latest now maps to a newer major.
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      - name: Plugin contract checks
-        # The API declaration ships in two places (Plugins/ for the repo,
-        # BundledPlugins/ for the app seed) — they must be byte-identical, and
-        # every bundled plugin's TypeScript must typecheck against it (P3-01).
-        run: |
-          diff -u Plugins/noteclarity.d.ts BundledPlugins/noteclarity.d.ts
-          for src in BundledPlugins/*/src/main.ts; do
-            echo "typecheck $src"
-            npx -y -p typescript@5.5.4 tsc --noEmit --target ES2019 --lib es2019,dom "$src"
-          done
-
       - name: Select newest Xcode 16.x
         run: |
-          ls -d /Applications/Xcode*.app
-          sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)/Contents/Developer"
+          shopt -s nullglob
+          candidates=(/Applications/Xcode_16*.app)
+          if (( ${#candidates[@]} == 0 )); then
+            echo "No Xcode 16 installation is available" >&2
+            exit 1
+          fi
+          xcode=$(printf '%s\n' "${candidates[@]}" | sort -V | tail -1)
+          sudo xcode-select -s "$xcode/Contents/Developer"
           xcodebuild -version
 
       - name: Build (Debug)
@@ -48,12 +56,7 @@ jobs:
           CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 
       - name: Unit tests
-        # The scheme's TestAction pins NOTECLARITY_SUPPORT_DIR/UPDATE_API to
-        # scratch values, so the hosted app never touches a real profile.
-        run: >
-          xcodebuild test -project NoteClarity.xcodeproj -scheme NoteClarity
-          -destination 'platform=macOS'
-          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+        run: bash Scripts/test.sh
 
       - name: Build (Release)
         run: >

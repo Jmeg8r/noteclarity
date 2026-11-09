@@ -16,10 +16,10 @@ on:
 
 jobs:
   plugin-contracts:
-    # Same commands as the "Plugin contract checks" step in .github/workflows/ci.yml.
-    # The API declaration ships in two places (Plugins/ for the repo, BundledPlugins/
-    # for the app seed); they must be byte-identical, and every bundled plugin's
-    # TypeScript must typecheck against it with the pinned compiler.
+    # Same script as the plugin-contracts job in .github/workflows/ci.yml. The API
+    # declaration ships in two places (Plugins/ for the repo, BundledPlugins/ for the
+    # app seed); they must be byte-identical, and every bundled plugin's TypeScript
+    # must compile with the pinned compiler to exactly the shipped main.js.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -30,12 +30,7 @@ jobs:
         with:
           node-version: '22'
       - name: Plugin contract checks
-        run: |
-          diff -u Plugins/noteclarity.d.ts BundledPlugins/noteclarity.d.ts
-          for src in BundledPlugins/*/src/main.ts; do
-            echo "typecheck $src"
-            npx -y -p typescript@5.5.4 tsc --noEmit --target ES2019 --lib es2019,dom "$src"
-          done
+        run: bash Scripts/check-plugins.sh
 
   workflow-placement:
     # Forgejo silently skips .github/workflows/ now, and forge-pr cannot see a check
