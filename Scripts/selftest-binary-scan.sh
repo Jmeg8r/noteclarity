@@ -100,7 +100,12 @@ buf.write(b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1))
 for o in offs:
     buf.write(b"%010d 00000 n \n" % o)
 buf.write(b"trailer <</Size %d/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, xref))
-open(out, "wb").write(buf.getvalue())
+# `with`, not a bare open().write(): CPython's refcounting happens to close the
+# handle immediately, but the fixture's completeness should not rest on an
+# implementation detail of one interpreter — a truncated PDF here fails cases
+# for reasons that have nothing to do with the scanner.
+with open(out, "wb") as fh:
+    fh.write(buf.getvalue())
 PY
 }
 
@@ -158,14 +163,18 @@ new_repo() {
 # `set +e`/`set -e` around it also works, but it disarms errexit for the duration,
 # and a suite that turns off its own safety to observe a failure is one edit away
 # from leaving it off.
+# `bash "$SUT"`, matching how lefthook and CI invoke the gate — the sibling
+# suite states the rule: executing "$SUT" directly requires the execute bit,
+# which the real invocations deliberately do not depend on, so the suite would
+# be testing a property the gate does not have.
 run_sut() {
-  if SUT_OUT="$("$SUT" 2>&1)"; then SUT_RC=0; else SUT_RC=$?; fi
+  if SUT_OUT="$(bash "$SUT" 2>&1)"; then SUT_RC=0; else SUT_RC=$?; fi
 }
 # Same capture, with arguments. Kept separate so the no-argument default path --
 # the one the pre-commit hook actually invokes -- is still exercised by a call
 # that passes literally nothing.
 run_sut_args() {
-  if SUT_OUT="$("$SUT" "$@" 2>&1)"; then SUT_RC=0; else SUT_RC=$?; fi
+  if SUT_OUT="$(bash "$SUT" "$@" 2>&1)"; then SUT_RC=0; else SUT_RC=$?; fi
 }
 
 echo "scan-staged-binaries.sh self-test"
@@ -276,17 +285,41 @@ for _e in doc xls suo wsuo v2 vsidx; do
   printf 'key = %s\n' "$SECRET" > "memo.$_e"
 done
 git add memo.*; run_sut
-# One staged set, one run, one JOINED assertion per extension (the filename must
-# appear WITHIN the NOT INSPECTED record -- -A8 spans the six-line list), so no
-# extension can quietly fall back into the invisible gap this case closed, and
-# a name landing in UNKNOWN instead cannot masquerade as covered.
+# One staged set, one run, one JOINED assertion per extension: each filename must
+# appear WITHIN the NOT INSPECTED record, so no extension can quietly fall back
+# into the invisible gap this case closed, and a name landing in UNKNOWN instead
+# cannot masquerade as covered. (Policy being asserted: NOT INSPECTED = opaque,
+# reported, NON-blocking; UNKNOWN = should-have-been-readable, reported, FAILS.
+# The two buckets carry different verdicts, which is why landing in the wrong
+# one matters.)
+# The record is extracted by its OWN DELIMITERS — from the header line to the
+# "Judge these" trailer — not by `grep -A8`, which coupled the assertion to the
+# list being exactly six lines: a seventh extension or a reordered summary would
+# silently shrink what the grep could see. Extracted ONCE into a variable, so
+# the match below is a herestring rather than the `| grep -q` pipeline that can
+# die of SIGPIPE (141) under this file's own pipefail.
+_5e_block=$(sed -n '/NOT INSPECTED/,/Judge these by hand/p' <<<"$SUT_OUT")
 _5e_bad=""
 for _e in doc xls suo wsuo v2 vsidx; do
-  grep -A8 "NOT INSPECTED" <<<"$SUT_OUT" | grep -qF "memo.$_e" || _5e_bad="$_5e_bad memo.$_e"
+  grep -qF "memo.$_e" <<<"$_5e_block" || _5e_bad="$_5e_bad memo.$_e"
 done
 if [ "$SUT_RC" -eq 0 ] && [ -z "$_5e_bad" ]; then
   ok "all six built-in-skipped formats are reported NOT INSPECTED (doc xls suo wsuo v2 vsidx)"
 else bad "vanished or wrong bucket:${_5e_bad} (rc=$SUT_RC)" "$SUT_OUT"; fi
+
+# 5f. A TYPE CHANGE (status T) is still scanned. scan-staged-binaries.sh's own
+#     comment records that a symlink replaced by a real file "was enumerated as
+#     NOTHING" before ACMRT — but until this case, no fixture staged one, so two
+#     files claimed a coverage nothing exercised. Same shape as the rename case
+#     above, reached through the T path.
+new_repo c5f
+ln -s /etc/hosts book.xlsx; git add book.xlsx; git commit -qm "symlink base" >/dev/null
+rm book.xlsx
+build_xlsx book.xlsx "token $SECRET"
+git add book.xlsx; run_sut
+if [ "$SUT_RC" -ne 0 ] && grep -qF "SECRET in book.xlsx" <<<"$SUT_OUT"; then
+  ok "a type change (symlink -> secret-bearing xlsx) is still scanned (T in ACMRT)"
+else bad "type-changed binary escaped the scan (rc=$SUT_RC)" "$SUT_OUT"; fi
 
 # 6. Opaque formats are reported as NOT INSPECTED but do not block.
 new_repo c6
@@ -341,9 +374,9 @@ git add doc.pdf
 mkdir -p "$WORK/stub"
 printf '#!/bin/sh\necho "unknown command" >&2\nexit 2\n' > "$WORK/stub/gitleaks"
 chmod +x "$WORK/stub/gitleaks"
-set +e
-STUB_OUT="$(PATH="$WORK/stub:$PATH" "$SUT" 2>&1)"; STUB_RC=$?
-set -e
+# The `if VAR=$(...)` capture, matching this file's own stated rule above:
+# `set +e`/`set -e` disarms errexit for the duration and a later edit leaves it off.
+if STUB_OUT="$(PATH="$WORK/stub:$PATH" bash "$SUT" 2>&1)"; then STUB_RC=0; else STUB_RC=$?; fi
 # Assert the CAUSE, not just the word UNKNOWN -- and the cause moved. The
 # version PRE-FLIGHT (guard in assertion-only mode) now rejects an unsupported
 # binary before any scan runs, which is strictly earlier and better-attributed
@@ -405,7 +438,7 @@ run_sut_args --range "$RANGE_BASE" HEAD
 # in the message makes the case fail unless a range was genuinely walked.
 if [ "$SUT_RC" -eq 0 ] \
    && ! grep -q "preexisting.xlsx" <<<"$SUT_OUT" \
-   && grep -q "$RANGE_BASE...HEAD" <<<"$SUT_OUT"; then
+   && grep -qF "$RANGE_BASE...HEAD" <<<"$SUT_OUT"; then
   ok "--range: pre-existing secrets outside the range are not attributed to it"
 else bad "--range reported a file the range does not contain, or never walked a range (rc=$SUT_RC)" "$SUT_OUT"; fi
 
@@ -498,7 +531,7 @@ mkdir -p sub
 build_xlsx sub/deep.xlsx "API key: $SECRET"
 git add sub/deep.xlsx; git commit -qm "secret in a subdirectory" >/dev/null
 mkdir -p other
-if SUT_OUT="$( cd other && "$SUT" --tree HEAD 2>&1 )"; then SUT_RC=0; else SUT_RC=$?; fi
+if SUT_OUT="$( cd other && bash "$SUT" --tree HEAD 2>&1 )"; then SUT_RC=0; else SUT_RC=$?; fi
 if [ "$SUT_RC" -ne 0 ] && grep -qF "SECRET in sub/deep.xlsx" <<<"$SUT_OUT"; then
   ok "--tree scans the whole tree when run from a subdirectory"
 else bad "--tree run from a subdirectory missed the secret (rc=$SUT_RC)" "$SUT_OUT"; fi
@@ -536,13 +569,170 @@ STUB
   # "${a[@]}" on an empty array is an unbound-variable error under `set -u` there.
   sut_args=()
   [ "$mode" = tree ] && sut_args=(--tree HEAD)
-  if OUT="$(PATH="$WORK/gitstub-$mode:$PATH" "$SUT" "${sut_args[@]+"${sut_args[@]}"}" 2>&1)"; then
+  if OUT="$(PATH="$WORK/gitstub-$mode:$PATH" bash "$SUT" "${sut_args[@]+"${sut_args[@]}"}" 2>&1)"; then
     RC=0
   else RC=$?; fi
   if [ "$RC" -ne 0 ] && grep -q "could not enumerate" <<<"$OUT"; then
     ok "$mode: a failed enumeration fails closed"
   else bad "$mode: failed enumeration did not fail closed (rc=$RC)" "$OUT"; fi
 done
+
+# 22. A CANDIDATE-SUPPLIED .gitleaksignore MUST NOT suppress a text-path
+#     finding, from CWD, REGARDLESS of --gitleaks-ignore-path or where --config
+#     points. This is the sharpest case in this file, because the first fix
+#     attempted here (pin --gitleaks-ignore-path, tested with --config pointed
+#     elsewhere) still FAILED this exact case -- read gitleaks 8.30.1's own
+#     source (cmd/root.go) to find out why:
+#
+#       if fileExists(gitleaksIgnorePath) { AddGitleaksIgnore(gitleaksIgnorePath) }
+#       if fileExists(join(gitleaksIgnorePath, ".gitleaksignore")) { ... }
+#       if fileExists(join(source, ".gitleaksignore")) { ... }            <- always runs
+#
+#     --gitleaks-ignore-path controls only the first two checks. The THIRD is
+#     unconditional and ignores the flag entirely. For `gitleaks stdin`
+#     specifically, `source` is hardcoded to "" (cmd/stdin.go), which resolves
+#     to the process's CWD -- so no value of --gitleaks-ignore-path, and no
+#     choice of --config, can stop `gitleaks stdin` from also reading a
+#     .gitleaksignore sitting in cwd. That is why scan-staged-binaries.sh no
+#     longer calls `gitleaks stdin` for text content at all: `gitleaks dir
+#     <file>` sets `source` to the file's own path, and `<file>/.gitleaksignore`
+#     can never exist (it is not a directory) -- verified the same way.
+#
+#     So this case does NOT need --config pointed elsewhere to be meaningful
+#     (unlike the archive/dir-mode fingerprint story) -- the vulnerability was
+#     never about --config's location, it was about the stdin subcommand
+#     itself. Default (colocated) config is enough to prove the fix: the
+#     malicious .gitleaksignore sits in cwd, right next to the secret, exactly
+#     where an attacker would put it, and the finding must survive anyway.
+#     stdin findings carry an EMPTY File field, so the fingerprint needed is
+#     just ":<ruleID>:<line>" -- fully guessable, unlike the archive path's
+#     random probe-path fingerprint. The primary `gitleaks git --staged` gate
+#     is separately blind to svg by path, so this scanner was the ONLY net for
+#     that file, and this was its only gap.
+new_repo c22
+printf '<svg xmlns="http://www.w3.org/2000/svg"><desc>key %s</desc></svg>\n' "$SECRET" > logo.svg
+printf ':coderabbit-api-key:1\n' > .gitleaksignore
+git add logo.svg .gitleaksignore; run_sut
+if [ "$SUT_RC" -ne 0 ] && grep -qF "SECRET in logo.svg" <<<"$SUT_OUT"; then
+  ok "a candidate .gitleaksignore in cwd does not suppress a text-path finding"
+else bad "a candidate .gitleaksignore suppressed a text-path secret (rc=$SUT_RC)" "$SUT_OUT"; fi
+
+# 23. Compressed archives (tar/gz/tgz/bz2/xz/7z/rar, added to OPAQUE_EXTS this
+#     round) must be REPORTED, not invisible. The production bucket change
+#     shipped with no case exercising it -- a merge conflict or a "cleanup"
+#     pass dropping one of these seven extensions from OPAQUE_EXTS would still
+#     report `27 passed, 0 failed` and CI's "Prove the binary scan still works"
+#     step would go green, over a bucket that had silently gone back to being
+#     the exact svg/OLE double-miss this file exists to close. `.tar` needs no
+#     compression library to build, so it is the fixture; the other six
+#     extensions share the same `in_list ... OPAQUE_EXTS` branch, so one
+#     extension proves the branch is reachable and unbroken.
+new_repo c23
+printf 'key = %s\n' "$SECRET" > memo.txt
+tar -cf memo.tar memo.txt
+git add memo.tar; run_sut
+if [ "$SUT_RC" -eq 0 ] && grep -qF "memo.tar" <<<"$SUT_OUT" && grep -q "NOT INSPECTED" <<<"$SUT_OUT"; then
+  ok "a compressed-archive extension (tar) is reported NOT INSPECTED, not invisible"
+else bad "compressed archive vanished or wrong bucket (rc=$SUT_RC)" "$SUT_OUT"; fi
+
+# 24/25. --range must scan every document blob a commit in the range INTRODUCED,
+#     not only the blobs at HEAD. Reading `HEAD:path` for each path in the
+#     endpoint diff misses two shapes, both reported by Codex on the 2026-11-07
+#     fleet sync (openclaw-swarm#7, opencode-ai-harness#9, URE#28):
+#       24: a secret committed, then SANITISED by a later commit in the range --
+#           HEAD holds the clean bytes, but the secret is still in history and
+#           ships with the branch.
+#       25: a secret committed, then DELETED by a later commit -- the endpoint
+#           diff has no entry for the path at all, so it was never enumerated.
+#     Each uses a different reader (svg -> text path, pdf -> extractor path,
+#     docx -> archive path) so a fix that covers one bucket cannot pass the rest.
+new_repo c24
+git commit -qm "base" >/dev/null
+RANGE_BASE=$(git rev-parse HEAD)
+printf '<svg xmlns="http://www.w3.org/2000/svg"><desc>key %s</desc></svg>\n' "$SECRET" > logo.svg
+build_pdf memo.pdf "API key: $SECRET"
+git add logo.svg memo.pdf; git commit -qm "secret in documents" >/dev/null
+printf '<svg xmlns="http://www.w3.org/2000/svg"><desc>clean</desc></svg>\n' > logo.svg
+build_pdf memo.pdf "nothing to see here"
+git add logo.svg memo.pdf; git commit -qm "sanitise them" >/dev/null
+run_sut_args --range "$RANGE_BASE" HEAD
+if [ "$SUT_RC" -ne 0 ] && grep -qF "SECRET in logo.svg" <<<"$SUT_OUT" \
+   && grep -qF "SECRET in memo.pdf" <<<"$SUT_OUT"; then
+  ok "--range: a secret sanitised by a later commit in the range is still caught"
+else bad "--range missed a secret that a later commit sanitised (rc=$SUT_RC)" "$SUT_OUT"; fi
+
+new_repo c25
+git commit -qm "base" >/dev/null
+RANGE_BASE=$(git rev-parse HEAD)
+python3 - "$SECRET" <<'PYX'
+import sys, zipfile
+with zipfile.ZipFile("report.docx", "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types/>')
+    z.writestr("word/document.xml", "<w:document><w:t>API key: " + sys.argv[1] + "</w:t></w:document>")
+PYX
+git add report.docx; git commit -qm "secret in a docx" >/dev/null
+git rm -q report.docx; git commit -qm "delete it" >/dev/null
+run_sut_args --range "$RANGE_BASE" HEAD
+if [ "$SUT_RC" -ne 0 ] && grep -qF "SECRET in report.docx" <<<"$SUT_OUT"; then
+  ok "--range: a secret deleted by a later commit in the range is still caught"
+else bad "--range missed a secret that a later commit deleted (rc=$SUT_RC)" "$SUT_OUT"; fi
+
+# 26. The history walk must not drag BASE-branch blobs in through a merge. When
+#     the feature branch merges the base branch, `diff-tree -m` on that merge lists
+#     every file the base side added; without the reachable-from-BASE filter in
+#     enumerate_range those would be scanned and reported against this branch's
+#     author. Case 12 cannot see this: it has no merge.
+new_repo c26
+printf 'seed\n' > seed.txt; git add seed.txt; git commit -qm "fork point" >/dev/null
+git checkout -q -b feature
+printf 'text\n' > notes.md; git add notes.md; git commit -qm "innocent change" >/dev/null
+git checkout -q -
+build_xlsx preexisting.xlsx "API key: $SECRET"
+git add preexisting.xlsx; git commit -qm "secret lands on base" >/dev/null
+RANGE_BASE=$(git rev-parse HEAD)
+git checkout -q feature
+git merge -q --no-edit "$RANGE_BASE" >/dev/null
+run_sut_args --range "$RANGE_BASE" HEAD
+if [ "$SUT_RC" -eq 0 ] && ! grep -q "preexisting.xlsx" <<<"$SUT_OUT" \
+   && grep -qF "$RANGE_BASE...HEAD" <<<"$SUT_OUT"; then
+  ok "--range: a merge of the base branch does not attribute base blobs to the PR"
+else bad "--range reported a base-branch blob merged into the PR (rc=$SUT_RC)" "$SUT_OUT"; fi
+
+# 27. A rename the PR makes is the PR's change, even when the bytes already exist
+#     on the base. A secret-bearing asset.bin (opaque, so never read) renamed to
+#     asset.svg (read by the text path) needs scanning under its NEW name. A filter
+#     on blob reachability alone dropped it and reported "no binary or document
+#     files" -- found by Codex reviewing this very change. Only a MERGE's diff may
+#     be filtered that way; case 26 covers that side.
+new_repo c27
+printf '<svg xmlns="http://www.w3.org/2000/svg"><desc>key %s</desc></svg>\n' "$SECRET" > asset.bin
+git add asset.bin; git commit -qm "opaque asset on base" >/dev/null
+RANGE_BASE=$(git rev-parse HEAD)
+git mv asset.bin asset.svg; git commit -qm "rename into a scanned format" >/dev/null
+run_sut_args --range "$RANGE_BASE" HEAD
+if [ "$SUT_RC" -ne 0 ] && grep -qF "SECRET in asset.svg" <<<"$SUT_OUT"; then
+  ok "--range: a base blob renamed into a scanned format by the PR is scanned"
+else bad "--range dropped a base blob the PR renamed into a scanned format (rc=$SUT_RC)" "$SUT_OUT"; fi
+
+# 28. What a merge ITSELF introduces is the PR's change. Case 26 proves base
+#     content that a merge brings in is not blamed on the PR; this is the other
+#     half, so a filter that skipped merges entirely could not pass both. The
+#     merge commit adds a secret-bearing svg that neither parent has.
+new_repo c28
+printf 'seed\n' > seed.txt; git add seed.txt; git commit -qm "fork point" >/dev/null
+git checkout -q -b feature
+printf 'text\n' > notes.md; git add notes.md; git commit -qm "feature work" >/dev/null
+git checkout -q -
+printf 'more\n' > base.md; git add base.md; git commit -qm "base moves on" >/dev/null
+RANGE_BASE=$(git rev-parse HEAD)
+git checkout -q feature
+git merge -q --no-commit "$RANGE_BASE" >/dev/null 2>&1 || true
+printf '<svg xmlns="http://www.w3.org/2000/svg"><desc>key %s</desc></svg>\n' "$SECRET" > merged.svg
+git add merged.svg; git commit -qm "merge, adding a file" >/dev/null
+run_sut_args --range "$RANGE_BASE" HEAD
+if [ "$SUT_RC" -ne 0 ] && grep -qF "SECRET in merged.svg" <<<"$SUT_OUT"; then
+  ok "--range: a secret introduced by a merge commit itself is caught"
+else bad "--range missed a secret the merge commit itself introduced (rc=$SUT_RC)" "$SUT_OUT"; fi
 
 echo
 echo "  $pass passed, $fail failed"
@@ -556,7 +746,7 @@ echo "  $pass passed, $fail failed"
 # 20 against 25 cases let five disappear while the suite still reported success. A
 # guard that tolerates loss cannot detect loss.
 # Bumping this when you add a case is the point: it forces the change to be noticed.
-_EXPECTED_CASES=25
+_EXPECTED_CASES=33   # +c24-c28 range history (sanitised, deleted, merged base, renamed base blob, merge-introduced); +c5f type-change (round-3), +c22 .gitleaksignore bypass, +c23 compressed-archive OPAQUE_EXTS coverage (hotfix); bumping this on a new case is the guard's contract
 _total=$((pass + fail))
 if [ "$_total" -ne "$_EXPECTED_CASES" ]; then
   echo "  ✗ $_total case(s) ran, expected exactly $_EXPECTED_CASES"

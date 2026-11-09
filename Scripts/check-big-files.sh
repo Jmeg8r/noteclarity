@@ -34,8 +34,8 @@ LIMIT="${BIG_FILE_LIMIT:-5242880}"   # 5 MiB. Overridable so the self-test can u
 # silently is worse than no gate, because the green tick still gets believed.
 case "$LIMIT" in
   ''|*[!0-9]*)
-    echo "✗ BIG_FILE_LIMIT is not a non-negative integer: '$LIMIT'"
-    echo "    Refusing to run — an unparseable limit disables this check silently."
+    echo "✗ BIG_FILE_LIMIT is not a non-negative integer: '$LIMIT'" >&2
+    echo "    Refusing to run — an unparseable limit disables this check silently." >&2
     exit 2 ;;
 esac
 # Upper bound WITHOUT ARITHMETIC, because the arithmetic form has the very defect it
@@ -56,9 +56,45 @@ _INT64_MAX=9223372036854775807
 # shellcheck disable=SC2071  # `>` is deliberate: -gt is exactly what overflows here.
 if [ "${#LIMIT}" -gt "${#_INT64_MAX}" ] || \
    { [ "${#LIMIT}" -eq "${#_INT64_MAX}" ] && [[ "$LIMIT" > "$_INT64_MAX" ]]; }; then
-  echo "✗ BIG_FILE_LIMIT exceeds the shell's integer range: $LIMIT"
-  echo "    Refusing to run: a limit this large disables the check, and the"
-  echo "    comparison it feeds would error inside an \`if\`, where errexit cannot see it."
+  echo "✗ BIG_FILE_LIMIT exceeds the shell's integer range: $LIMIT" >&2
+  echo "    Refusing to run: a limit this large disables the check, and the" >&2
+  echo "    comparison it feeds would error inside an \`if\`, where errexit cannot see it." >&2
+  exit 2
+fi
+
+# GIT-VERSION FLOOR for --no-relative below (the `git diff --cached` call). --relative
+# itself is much older, but the config it must override -- diff.relative -- was added
+# in the SAME upstream commit that taught --no-relative to countermand it (git.git
+# c28ded83, "diff: add config option relative"), first shipped in v2.28.0. Verified
+# against git/git's real history with `git tag --contains
+# c28ded83fc95be8157c851c8be179733a7d4b137` rather than trusted secondhand: a PR
+# review of this gap cited 2.3.0, which is where bare --relative already existed but
+# diff.relative did not yet -- there is nothing at 2.3.0 for --no-relative to have
+# overridden. Below 2.28.0 there is no diff.relative to leak through either, so this
+# floor exists to turn "unverified old-git behavior" into a named, fail-closed
+# refusal rather than a silent guess, not because a real gap was found between the
+# two features.
+GIT_MIN_VERSION="2.28.0"
+_git_found=$(git --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)
+if [ -z "$_git_found" ]; then
+  echo "✗ could not determine the installed git version" >&2
+  echo "    \`git --version\` printed: $(git --version 2>&1)" >&2
+  echo "    Refusing to run — --no-relative's guarantees below are unverified without it." >&2
+  exit 2
+fi
+# sort -V verified before trusted -- same probe and same reason as
+# scripts/gitleaks-guard.sh: a `sort` that silently ignores -V falls back to
+# lexicographic order, which for two-digit git minors (2.9.0 vs 2.28.0) disagrees
+# with numeric order and would accept a below-floor git.
+if [ "$(printf '1.10.0\n1.9.0\n' | sort -V 2>/dev/null | head -n1)" != "1.9.0" ]; then
+  echo "✗ this system's sort cannot order versions (-V absent or ignored)" >&2
+  echo "    Refusing to guess whether git $_git_found meets the $GIT_MIN_VERSION floor." >&2
+  exit 2
+fi
+if [ "$(printf '%s\n%s\n' "$GIT_MIN_VERSION" "$_git_found" | sort -V | head -n1)" != "$GIT_MIN_VERSION" ]; then
+  echo "✗ git $_git_found is older than the required $GIT_MIN_VERSION" >&2
+  echo "    --no-relative needs $GIT_MIN_VERSION to reliably override a user's diff.relative=true;" >&2
+  echo "    older git could silently under-enumerate staged files. Upgrade git and retry." >&2
   exit 2
 fi
 
@@ -80,9 +116,14 @@ trap 'rm -f "$records"' EXIT
 # `git cat-file -s` can be ambiguous in a large object store — failing (or worse,
 # resolving against a different object) for a reason that has nothing to do with
 # the file being sized. Full names cost nothing and remove the class.
-if ! git diff --cached -z --raw --no-abbrev --diff-filter=ACMRT > "$records"; then
-  echo "✗ could not enumerate staged files (git exited non-zero)"
-  echo "    Refusing to report clean over an index this check could not read."
+# --no-relative: this is NOT --name-only-specific. Under a user's diff.relative=true,
+# run from a subdirectory, --raw's path field is subset the same way --name-only's is
+# -- measured directly: files outside the subdirectory are omitted from the record
+# list entirely rather than erroring. This hook never cds to the repo root and is
+# invoked from wherever `git commit` was run, so nothing here controls that config.
+if ! git diff --cached --no-relative -z --raw --no-abbrev --diff-filter=ACMRT > "$records"; then
+  echo "✗ could not enumerate staged files (git exited non-zero)" >&2
+  echo "    Refusing to report clean over an index this check could not read." >&2
   exit 1
 fi
 
@@ -93,6 +134,11 @@ fi
 # fields, which is why this reads fields rather than lines.
 checked=0
 oversize=0
+# Records deliberately not sized (gitlinks, intent-to-add). Counted so the summary
+# can say so: this file's own contract is that "nothing was reported" and "the
+# check never ran" must not look the same, and a gitlink-only commit that printed
+# a bare "checked 0" was exactly that ambiguity one size down.
+skipped=0
 
 # `read` returns non-zero on EOF whether the buffer is empty (clean end, between
 # records) or holds a partial field with no trailing NUL (a truncated stream).
@@ -142,30 +188,23 @@ while true; do
   # hook, and — the part that matters — any large file staged AFTER the gitlink is
   # never reached. Measured: small+gitlink+6MB exited 128 without ever checking the
   # 6MB file.
-  [ "$dstmode" = 160000 ] && continue
+  [ "$dstmode" = 160000 ] && { skipped=$((skipped + 1)); continue; }
 
   # An all-zero destination sha has no object to size. Only status D produces one and
   # D is filtered out above, so this is defensive: if some git version emits one,
   # cat-file would fail and errexit would refuse the commit for the wrong reason.
   case "$dstsha" in
     *[!0]*) ;;
-    *) continue ;;
+    *) skipped=$((skipped + 1)); continue ;;
   esac
 
   # Named failure branch: without it, a cat-file error aborts under errexit with
-
   # a bare git diagnostic — anonymously, the one thing this file says it will
-
   # never do. An unsizable staged blob is a refused commit, with the path named.
-
   size=$(git cat-file -s "$dstsha") || {
-
     echo "  ✗ could not size the staged blob for $path (git cat-file -s $dstsha failed)" >&2
-
     echo "      Refusing to pass a file this script could not measure." >&2
-
     exit 1
-
   }
   checked=$((checked + 1))
   if [ "$size" -gt "$LIMIT" ]; then
@@ -173,16 +212,30 @@ while true; do
     # one byte over the limit "is 5MB" against a "5MB" limit, which reads as a bug in
     # the check rather than a fact about the file.
     printf '✗ %s is %s bytes, over the %s byte limit — use LFS or add to .gitignore\n' \
-      "$path" "$size" "$LIMIT"
+      "$path" "$size" "$LIMIT" >&2
     oversize=$((oversize + 1))
   fi
 done < "$records"
 
-# Report N-checked. "nothing was reported" and "the check never ran" must not look the
-# same — this gate has produced the second while appearing to be the first.
+# Report N-checked AND N-skipped. "nothing was reported" and "the check never ran"
+# must not look the same — this gate has produced the second while appearing to be
+# the first. The skip count matters for the same reason: a gitlink-only commit
+# reads "checked 0", and without the skip note that is indistinguishable from a
+# run that enumerated nothing.
+# if-form purely for READABILITY, and the distinction matters enough to state:
+# `[ "$skipped" -gt 0 ] && _skipnote=...` would be perfectly safe under errexit
+# too. A failing test that is a non-final command of an AND-OR list is EXEMPT
+# from `set -e` — the same exemption the gitlink guard above relies on and
+# documents at length. An earlier version of this comment claimed the AND form
+# was fatal here; it is not, and a comment that invents a failure mode is how
+# the next reader gets sent to "fix" working code.
+_skipnote=""
+if [ "$skipped" -gt 0 ]; then
+  _skipnote=" ($skipped record(s) skipped: gitlink or no staged blob)"
+fi
 if [ "$oversize" -gt 0 ]; then
-  echo "  checked $checked staged blob(s); $oversize over the limit"
+  echo "  checked $checked staged blob(s)$_skipnote; $oversize over the limit" >&2
   exit 1
 fi
-echo "  no-big-files: checked $checked staged blob(s), none over $LIMIT bytes"
+echo "  no-big-files: checked $checked staged blob(s)$_skipnote, none over $LIMIT bytes"
 exit 0

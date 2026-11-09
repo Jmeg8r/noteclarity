@@ -12,8 +12,12 @@
 #   LEFTHOOK_EXCLUDE=tests git push      skip one job
 #   git commit --no-verify               nuclear option
 
-# 1.7.3 is where list-of-globs `exclude` landed. Below that the lint-yaml
-# exclusions below are silently ignored.
+# The floor exists for the lint-yaml `exclude` LIST below: on the fleet's
+# installed lefthook the list form works and the old "a|b" string form silently
+# matches nothing (measured — yamllint was linting lefthook.yml itself on every
+# commit). 1.7.3 is the oldest version the fleet has verified the list form on;
+# raise it only against a MEASURED failure on some real version, not a changelog
+# guess — three review rounds have each proposed a different "correct" floor.
 min_version: 1.7.3
 colors: true
 
@@ -158,9 +162,12 @@ pre-commit:
     lint-yaml:
       tags: lint
       glob: "*.{yml,yaml}"
-      # `exclude` must be a LIST of globs. The old "a|b" regex form was removed
-      # in lefthook v2.0.0, so it silently matched nothing — yamllint was linting
-      # lefthook.yml itself and reporting line-length warnings on every commit.
+      # `exclude` must be a LIST of globs. The old "a|b" regex string form
+      # silently matched nothing on the fleet's installed lefthook — measured:
+      # yamllint was linting lefthook.yml itself and reporting line-length
+      # warnings on every commit. (See the min_version note at the top of this
+      # file; do not re-cite a specific removing version here — the changelog
+      # claim this comment used to carry did not survive verification.)
       exclude:
         - "lefthook.yml"
         - ".coderabbit.yaml"
@@ -242,8 +249,8 @@ pre-commit:
       # A bare `run:` does fail when the file is absent — but ANONYMOUSLY, as a shell
       # "no such file" naming neither the job nor what went unscanned. Name it.
       run: |
-        if [ ! -f Scripts/scan-staged-binaries.sh ]; then
-          echo "✗ Scripts/scan-staged-binaries.sh is missing — binaries in this commit are UNSCANNED"
+        if [ ! -f Scripts/scan-staged-binaries.sh ] || [ ! -r Scripts/scan-staged-binaries.sh ]; then
+          echo "✗ Scripts/scan-staged-binaries.sh is missing or unreadable — binaries in this commit are UNSCANNED"
           echo "    This is not a clean result. Restore it from the kit:"
           echo "    10-repo-init.sh --path . --no-remote"
           exit 1
@@ -268,9 +275,19 @@ pre-commit:
         "$SCANNER" pre-commit-scan "$(git rev-parse --show-toplevel)"
 
     # Catch broken workflows before they burn Actions minutes on a flaky day.
+    #
+    # BOTH roots, deliberately. Forgejo silently ignores .github/workflows once
+    # .forgejo/workflows exists, so a forge-primary repo keeps its CI in
+    # .forgejo — where a .github-only glob matches nothing. lefthook then prints
+    # `lint-workflows (skip) no files for inspection` and the commit proceeds:
+    # in the hook summary a skipped gate is indistinguishable from a clean one,
+    # which is how this stayed dead on astgl-articles from its cutover onward.
+    #
+    # Verified on lefthook 2.1.10 — the brace alternation matches both roots and
+    # both extensions, and does NOT match a stray *.yml outside a workflows dir.
     lint-workflows:
       tags: lint
-      glob: ".github/workflows/*.{yml,yaml}"
+      glob: "{.github,.forgejo}/workflows/*.{yml,yaml}"
       run: actionlint -- {staged_files}
 
     # Keep the CodeRabbit config honest.
@@ -360,12 +377,14 @@ pre-commit:
       # four distinct ways in a single day and three of those were introduced while
       # fixing the previous one (#12) — an inline `run:` block cannot be exercised by
       # anything, so every version was validated by reading it, which is precisely
-      # how four wrong versions shipped. Scripts/selftest-no-big-files.sh covers 17
-      # shapes including the ones that produced each historical defect.
+      # how four wrong versions shipped. Scripts/selftest-no-big-files.sh covers the
+      # shapes that produced each historical defect; the authoritative case count
+      # lives in that file's _EXPECTED_CASES guard, not here, where it drifted
+      # stale within one release of being written down.
       # Named absence, never a skip, for the reason at secrets-binaries above.
       run: |
-        if [ ! -f Scripts/check-big-files.sh ]; then
-          echo "✗ Scripts/check-big-files.sh is missing — large blobs are UNCHECKED"
+        if [ ! -f Scripts/check-big-files.sh ] || [ ! -r Scripts/check-big-files.sh ]; then
+          echo "✗ Scripts/check-big-files.sh is missing or unreadable — large blobs are UNCHECKED"
           echo "    Restore it from the kit:  10-repo-init.sh --path . --no-remote"
           exit 1
         fi
@@ -377,11 +396,41 @@ commit-msg:
     conventional:
       # CodeRabbit and `gh pr create --fill` both key off commit subjects.
       # Consistent prefixes make PR titles write themselves.
+      #
+      # GIT'S OWN SUBJECTS ARE EXEMPT, deliberately: `git revert` writes
+      # `Revert "..."` and a conflict-resolution `git merge` writes
+      # `Merge branch '...'` — neither passes the conventional pattern, and a
+      # gate that blocks git's own porcelain teaches you to reach for
+      # --no-verify at exactly the moments (reverting, resolving) when you are
+      # least inclined to hand-edit a subject. The prefixes are anchored and
+      # literal, so a hand-written subject cannot ride the exemption by merely
+      # containing the words.
       run: |
-        head -n1 {1} | grep -qE '^(feat|fix|docs|refactor|test|chore|perf|ci|build|revert)(\(.+\))?!?: .{3,}' || {
+        # {1} IS QUOTED HERE, and unlike {staged_files} it is NOT quoted by
+        # lefthook — measured, not assumed: with an unquoted `[ ! -r {1} ]` and a
+        # message-file path containing a space, sh reports `[: too many
+        # arguments`. Reachable in a worktree whose directory name has a space,
+        # since the hook argument is then `.git/worktrees/<name>/COMMIT_EDITMSG`.
+        # The old `head -n1 {1}` carried the same latent defect more quietly: it
+        # would read the wrong files and judge an EMPTY subject, blocking a
+        # perfectly good commit for a reason nothing in the output names.
+        #
+        # Readable-check first: an unreadable message file would fail the grep
+        # and misreport as "subject not conventional" — the wrong cause, named
+        # confidently.
+        if [ ! -r "{1}" ]; then
+          echo "✗ cannot read the commit message file ({1}) — refusing to judge a subject that could not be read"
+          exit 1
+        fi
+        subject=$(head -n1 "{1}")
+        case "$subject" in
+          "Merge "*|"Revert \""*) exit 0 ;;
+        esac
+        printf '%s\n' "$subject" | grep -qE '^(feat|fix|docs|refactor|test|chore|perf|ci|build|revert)(\(.+\))?!?: .{3,}' || {
           echo "✗ Commit subject must be conventional, e.g.:"
           echo "    feat(ladder): add project 07 file walker"
           echo "    fix(jdex): handle missing index on first run"
+          echo "  (git-generated Merge/Revert subjects are exempt)"
           exit 1
         }
 
@@ -465,14 +514,23 @@ pre-push:
           echo "  (pytest not installed — skipping)"
         else
           echo "  using: $PYTEST ($("$PYTEST" --version 2>&1 | head -1))"
-          "$PYTEST" -q --collect-only >/dev/null 2>&1
-          collect_rc=$?
+          # Collected ONCE, output kept. The old form collected twice — silently
+          # for the verdict, again for the error display — and a flaky collection
+          # (import-order, plugin state, clock-sensitive discovery) could show the
+          # reader a DIFFERENT failure than the one that was judged. The captured
+          # output is replayed instead. if-capture rather than a bare `$?` so the
+          # status is read where the command runs.
+          if collect_out=$("$PYTEST" -q --collect-only 2>&1); then
+            collect_rc=0
+          else
+            collect_rc=$?
+          fi
           case "$collect_rc" in
             0) "$PYTEST" -q --maxfail=1 ;;
             5) echo "  (no Python tests collected — skipping)" ;;
             *) echo "  pytest collection FAILED (exit $collect_rc)." >&2
                echo "  This is NOT 'no tests' -- see the error below." >&2
-               "$PYTEST" -q --collect-only
+               printf '%s\n' "$collect_out" >&2
                exit "$collect_rc" ;;
           esac
         fi
@@ -541,8 +599,46 @@ pre-push:
     typecheck:
       tags: types
       run: |
-        if command -v mypy >/dev/null 2>&1 && [ -f pyproject.toml ]; then
-          mypy . || true   # advisory until the codebase is fully annotated
+        # Same resolution ladder as the pytest selection in `tests`, for the same
+        # measured reason: PATH finds whatever the machine resolves globally,
+        # which is frequently NOT the environment the project's own deps and
+        # stubs live in — a PATH mypy typechecks against the wrong site-packages
+        # and its verdict describes some other environment. Most explicit first;
+        # PATH is the last resort, not the first.
+        if [ ! -f pyproject.toml ]; then
+          exit 0
+        fi
+        if [ -n "${VIRTUAL_ENV:-}" ] && [ -x "${VIRTUAL_ENV}/bin/mypy" ]; then
+          MYPY="${VIRTUAL_ENV}/bin/mypy"
+        elif [ -x .venv/bin/mypy ]; then
+          MYPY=.venv/bin/mypy
+        elif [ -x venv/bin/mypy ]; then
+          MYPY=venv/bin/mypy
+        elif command -v mypy >/dev/null 2>&1; then
+          MYPY=mypy
+        else
+          MYPY=""
+        fi
+        if [ -n "$MYPY" ]; then
+          echo "  using: $MYPY"
+          # Advisory about TYPE ERRORS until the codebase is fully annotated --
+          # not about the tool. mypy exits 0 clean, 1 type errors, 2 crash or bad
+          # usage; anything above 1 means nothing was checked. `|| true` used to
+          # swallow all of it, and `command -v mypy` is satisfied by a pyenv shim
+          # for a version with no mypy installed: the shim exits 127 and the job
+          # reported a pass having checked nothing (2026-11-07 fleet sync). Same
+          # line format-python draws for ruff.
+          rc=0
+          "$MYPY" . || rc=$?
+          if [ "$rc" -gt 1 ]; then
+            echo "✗ mypy itself failed (exit $rc) — nothing was typechecked; this is not a type error"
+            exit "$rc"
+          fi
+          if [ "$rc" -eq 1 ]; then
+            echo "  (type errors above are advisory until the codebase is fully annotated)"
+          fi
+        else
+          echo "  (mypy not installed — skipping)"
         fi
 
     # The Node/TypeScript counterpart to `typecheck` above.
@@ -622,8 +718,8 @@ pre-push:
       # absence rather than failing as a bare "no such file", and never skip.
       # `bash <script>` so a dropped execute bit is not itself a failure mode.
       run: |
-        if [ ! -f Scripts/test-gitleaks-guard.sh ]; then
-          echo "✗ Scripts/test-gitleaks-guard.sh is missing — the secret scanner is unverified"
+        if [ ! -f Scripts/test-gitleaks-guard.sh ] || [ ! -r Scripts/test-gitleaks-guard.sh ]; then
+          echo "✗ Scripts/test-gitleaks-guard.sh is missing or unreadable — the secret scanner is unverified"
           echo "    A scanner nobody checks is how the binary blind spot survived."
           echo "    Restore it from the kit:  10-repo-init.sh --path . --no-remote"
           exit 1
@@ -659,8 +755,16 @@ pre-push:
           # No upstream yet. Diff against the remote's default branch if we can
           # see it; otherwise scan the whole history (first push of a new repo).
           BASE=""
+          # if-form for the reader, not for errexit: a failing non-final command
+          # of an AND-OR list is exempt from `set -e` (the CORRECTED paragraph at
+          # no-big-files documents the same exemption), so the old
+          # `show-ref && { ... }` DID fall through to the whole-history scan.
+          # Verified in a repo with no origin/main|master before rewording.
           for c in main master; do
-            git show-ref --verify --quiet "refs/remotes/origin/$c" && { BASE="origin/$c"; break; }
+            if git show-ref --verify --quiet "refs/remotes/origin/$c"; then
+              BASE="origin/$c"
+              break
+            fi
           done
           if [ -n "$BASE" ]; then RANGE="$BASE..HEAD"; else RANGE=""; fi
         fi
@@ -670,15 +774,62 @@ pre-push:
           bash Scripts/gitleaks-guard.sh git --no-banner --redact
         fi
 
+    # Lint every workflow this repo actually ships, at BOTH roots.
+    #
+    # Forgejo SILENTLY ignores .github/workflows once .forgejo/workflows exists,
+    # so a repo that has cut over to the forge keeps its CI in .forgejo. Bare
+    # `actionlint` only auto-discovers .github/workflows, and the previous
+    # `-d .github/workflows` guard went FALSE on such a repo — so this job
+    # PASSED having linted ZERO files. Confirmed dead on astgl-articles from its
+    # cutover onward; mcp-techkb would have gone the same way on its.
+    #
+    # Two failure directions, both wrong. With the empty .github/workflows that
+    # `git mv` leaves behind, bare actionlint exits 3 ("no YAML file was found")
+    # and blocks for the wrong reason; on a clean checkout the guard is false and
+    # the job skips silently. Enumerating both roots explicitly fixes both.
+    #
+    # A zero-file scan is a FAILURE, not a pass. Every kit-provisioned repo gets
+    # a workflow — 10-repo-init.sh installs the secret-scan job — so zero files
+    # means it was deleted or moved somewhere neither root covers, and a check
+    # that scanned nothing is UNKNOWN, never clean. The N-examined count prints
+    # for the same reason: a bare green says nothing about what was in scope.
+    #
+    # `find` is run PER ROOT, guarded by an existence test, and its exit status is
+    # CHECKED. The earlier shape -- both roots in one call with `2>/dev/null || true`
+    # -- conflated two different things: a directory that is legitimately absent (the
+    # normal case on every repo that uses only one root) and a directory that exists
+    # but could not be READ. The second is a scan failure, and swallowing it
+    # reintroduces exactly what this job exists to prevent -- an unreadable active
+    # .forgejo/workflows beside a readable stale .github/workflows would lint the
+    # stale files and report success over partial coverage. Absent is skipped;
+    # unreadable BLOCKS. Nothing is redirected to /dev/null, so a real error stays
+    # visible on stderr.
     workflows:
       tags: lint
       run: |
-        if [ -d .github/workflows ]; then
-          actionlint
+        set -eu
+        files=""
+        for d in .github/workflows .forgejo/workflows; do
+          [ -d "$d" ] || continue
+          if ! found=$(find "$d" -maxdepth 1 -type f \
+                         \( -name '*.yml' -o -name '*.yaml' \)); then
+            echo "✗ workflow lint could not enumerate $d — a partial scan is not a pass"
+            exit 1
+          fi
+          [ -n "$found" ] || continue
+          if [ -n "$files" ]; then files=$(printf '%s\n%s' "$files" "$found"); else files="$found"; fi
+        done
+        if [ -z "$files" ]; then
+          echo "✗ workflow lint scanned ZERO files — expected .forgejo/workflows or .github/workflows"
+          exit 1
         fi
+        printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 actionlint --
+        echo "  actionlint: linted $(printf '%s\n' "$files" | grep -c .) workflow file(s)"
 
-    # The binary secret gate is itself testable, so test it. A scanner nobody
-    # verifies is how the original hole survived review in the first place.
+    # The size gate is itself testable, so test it. (This header once described
+    # the BINARY gate — a job was inserted between a comment and the job it
+    # described, and the comment stayed put. Each selftest job now carries its
+    # own header.)
     selftest-no-big-files:
       tags: hygiene
       # The recurrence probe from #12. Same shape and same reason as
@@ -692,8 +843,8 @@ pre-push:
         # by a passing --self-check — precisely the false green this job exists
         # to prevent.
         set -eu
-        if [ ! -f Scripts/selftest-no-big-files.sh ]; then
-          echo "✗ Scripts/selftest-no-big-files.sh is missing — the size gate is unverified"
+        if [ ! -f Scripts/selftest-no-big-files.sh ] || [ ! -r Scripts/selftest-no-big-files.sh ]; then
+          echo "✗ Scripts/selftest-no-big-files.sh is missing or unreadable — the size gate is unverified"
           echo "    Restore it from the kit:  10-repo-init.sh --path . --no-remote"
           exit 1
         fi
@@ -715,8 +866,8 @@ pre-push:
         # secret-scan-selftest runs its script unconditionally; match it.
         # `bash <script>` rather than `./<script>` so a dropped execute bit is
         # not itself a failure mode.
-        if [ ! -f Scripts/selftest-binary-scan.sh ]; then
-          echo "✗ Scripts/selftest-binary-scan.sh is missing — the binary gate is unverified"
+        if [ ! -f Scripts/selftest-binary-scan.sh ] || [ ! -r Scripts/selftest-binary-scan.sh ]; then
+          echo "✗ Scripts/selftest-binary-scan.sh is missing or unreadable — the binary gate is unverified"
           exit 1
         fi
         bash Scripts/selftest-binary-scan.sh
@@ -728,4 +879,25 @@ pre-push:
 review:
   commands:
     coderabbit:
-      run: cr review --base "${CR_BASE:-main}"
+      # The base is RESOLVED, not hardcoded. `--base main` on a stacked PR
+      # reports drift that is not this PR's diff and misses drift that is — the
+      # same silent-wrong-base failure the auto_review note in .coderabbit.yaml
+      # documents from the bot's side. Precedence: an explicit CR_BASE always
+      # wins; otherwise ask gh for the OPEN PR's actual base; fall back to main
+      # only when there is no PR to ask (or no gh). A metered, deliberately-run
+      # review already talks to the network, so the gh lookup adds no new class
+      # of dependency — and it prints which base it chose, so a wrong guess is
+      # visible rather than silent.
+      run: |
+        if [ -n "${CR_BASE:-}" ]; then
+          base="$CR_BASE"
+          echo "  review base: $base (CR_BASE)"
+        elif command -v gh >/dev/null 2>&1 \
+             && base=$(gh pr view --json baseRefName --jq .baseRefName 2>/dev/null) \
+             && [ -n "$base" ]; then
+          echo "  review base: $base (from the open PR)"
+        else
+          base=main
+          echo "  review base: main (no CR_BASE, no open PR — override with CR_BASE=<branch>)"
+        fi
+        cr review --base "$base"
