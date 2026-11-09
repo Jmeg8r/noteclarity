@@ -29,5 +29,16 @@
   (`~/Library/Preferences/com.jmeg8r.noteclarity.plist`) were last modified 2026-11-08,
   before this session; the evidence seat's test run used its own bundle id.
 
+## Known limitation (Codex P2, 2026-11-09)
+- **The gate's blast radius is blind to Swift callers.** `bin/blast-radius.py` resolves
+  structural references for Python and JS/TS only; for a Swift target it searches for
+  the literal file name, which Swift code never mentions. Reproduced:
+  `NoteClarity/Models/LineMarkers.swift` gives `blast_radius: 0` although `AppState`,
+  `EditorController`, `LineNumberRulerView` and `LineMarkersTests` use it. The gate still
+  reviews the diff against the standards; it just gets no caller context for Swift
+  changes. The script stays byte-identical here, so the fix belongs in sovereign-forge.
+
 ## Deviations
-_None yet._
+- **Workflow placement uses an explicit directory check.** The planned `find ... 2>/dev/null
+  || true` would have hidden a real `find` failure; the job now exits OK only when
+  `.github/workflows/` is absent and otherwise lets `find` fail loudly.
