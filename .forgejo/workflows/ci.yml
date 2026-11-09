@@ -1,0 +1,63 @@
+# WHAT: Forge CI for noteclarity — the checks a Linux runner can make: the plugin API
+#       contract and bundled-plugin typecheck, and a guard on .github/workflows/.
+# WHY:  The forge has no macOS runner, so .github/workflows/ci.yml's Xcode job was
+#       cancelled unscheduled on every forge run, and once .forgejo/workflows/ exists
+#       Forgejo ignores .github/workflows/ entirely. The Xcode build and tests are a
+#       required local check instead (CLAUDE.md "## 4. CI and merging"); GitHub Actions
+#       on the mirror still runs .github/workflows/ci.yml as a post-merge backstop.
+#       Change: docs/changes/2026-11-09-adopt-gate-kit/.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  plugin-contracts:
+    # Same commands as the "Plugin contract checks" step in .github/workflows/ci.yml.
+    # The API declaration ships in two places (Plugins/ for the repo, BundledPlugins/
+    # for the app seed); they must be byte-identical, and every bundled plugin's
+    # TypeScript must typecheck against it with the pinned compiler.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Plugin contract checks
+        run: |
+          diff -u Plugins/noteclarity.d.ts BundledPlugins/noteclarity.d.ts
+          for src in BundledPlugins/*/src/main.ts; do
+            echo "typecheck $src"
+            npx -y -p typescript@5.5.4 tsc --noEmit --target ES2019 --lib es2019,dom "$src"
+          done
+
+  workflow-placement:
+    # Forgejo silently skips .github/workflows/ now, and forge-pr cannot see a check
+    # that never reports, so a workflow added there would stop running unnoticed.
+    # ci.yml stays for the GitHub mirror's macOS backstop; anything else belongs in
+    # .forgejo/workflows/.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Only ci.yml in .github/workflows
+        run: |
+          if [ ! -d .github/workflows ]; then
+            echo "OK: no .github/workflows directory"
+            exit 0
+          fi
+          stray=$(find .github/workflows -mindepth 1 ! -name ci.yml)
+          if [ -n "$stray" ]; then
+            echo "Forgejo ignores .github/workflows/; move these to .forgejo/workflows/:"
+            echo "$stray"
+            exit 1
+          fi
+          echo "OK: .github/workflows holds only ci.yml"
