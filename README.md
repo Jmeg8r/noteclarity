@@ -88,16 +88,43 @@ session writes pause for that run and the app explains why. The editor's
 
 ```
 NoteClarity/
-├── App/            NoteClarityApp (scenes, menus), AppDelegate, AppState (hub), AppSettings
-├── Models/         FileEncoding, LineEnding, Language, Debouncer
+├── App/            NoteClarityApp (scenes, menus), AppDelegate, AppState (hub), AppSettings,
+│                   AppProfile (settings/data profile selection), DraftBackups, TextFileReader
+│                   (bounded open/reload reads), FileWatcher, UpdateChecker, DefaultsMigration,
+│                   Typography
+├── Models/         TextModel (FileEncoding, LineEnding, Language, Debouncer, SemVer, WordCompletion),
+│                   LineMarkers (bookmarks + change bars)
 ├── Editor/         CodeTextView (TextKit 2 NSTextView), EditorController (per-tab stack),
 │                   LineNumberRulerView, EditorTheme (asset-catalog colors)
 ├── Highlighting/   SyntaxHighlighter protocol, RegexHighlighter, LanguageRules (+ symbols)
-├── Search/         SearchEngine + FindState + find/replace operations
+├── Search/         SearchEngine + find/replace operations (AppState extension)
 ├── UI/             MainWindowView, TabBarView, StatusBarView, FindBarView, SidebarView, SettingsView
 └── PluginSystem/   PluginManager, PluginInstance (JSContext bridge), PanelController (WKWebView),
+                    PluginPolicy (manifest validation, path containment, grant store),
                     PluginModels (manifest/permissions/events)
 ```
+
+```mermaid
+flowchart TD
+    UI[SwiftUI shell: UI/] --> AppState[AppState hub]
+    GH[GitHub releases] -->|UpdateChecker, weekly| AppState
+    AppState -->|one per tab| Editor[EditorController + CodeTextView]
+    Editor --> HL[Highlighting]
+    AppState --> Support[(Application Support: session, drafts, Plugins)]
+    AppState -->|events| PM[PluginManager]
+    PM -->|permission checks| Policy[PluginPolicy]
+    PM -->|messages| Panels[PanelController WKWebView]
+```
+
+<!-- archify:start -->
+### System map
+
+![System map](docs/diagrams/noteclarity.architecture.svg)
+
+Interactive: [`docs/diagrams/noteclarity.architecture.html`](docs/diagrams/noteclarity.architecture.html)
+— search, trace routes, compare roles. Source of truth is the typed IR
+[`noteclarity.architecture.json`](docs/diagrams/noteclarity.architecture.json); edit that, never the HTML.
+<!-- archify:end -->
 
 Key decisions:
 

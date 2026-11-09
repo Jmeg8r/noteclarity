@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "856a071f-a561-4354-9ce2-3eb9827b5958",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/Volumes/Projects/Repositories/.worktrees/noteclarity-doco-20261106/docs/diagrams/noteclarity.architecture.json",
+  "output": "/Volumes/Projects/Repositories/.worktrees/noteclarity-doco-20261106/docs/diagrams/noteclarity.architecture.html",
+  "specification": {
+    "sha256": "1e0f8e9b695e62fae39ddbc15f6c96c94bdc356ade4836475f644151ae5e0265",
+    "bytes": 3954
+  },
+  "artifact": {
+    "sha256": "57e2f9941352db3275f5423d299f9625ac110dbcec2160463bf4a823ca078ee1",
+    "bytes": 823864
+  }
+}
