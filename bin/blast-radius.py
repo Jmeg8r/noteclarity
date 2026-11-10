@@ -182,6 +182,8 @@ SWIFT_DECL_RE = re.compile(
     r"`?([A-Za-z_][A-Za-z0-9_]*)")
 # Visible only inside the declaring file, so no other file can be its dependent.
 SWIFT_FILE_PRIVATE = {"private", "fileprivate"}
+# git ls-tree's mode for a symlink, which is never read (see readable_text).
+SYMLINK_MODE = "120000"
 # A module named by a STRING at a loader call rather than by the import grammar. The
 # quotes make the name unambiguous at ANY length, which is what makes this the right
 # route for a name too short for word_token's floor -- lowering that floor instead was
@@ -858,15 +860,49 @@ def swift_names(text: str) -> set[str]:
     return {n for n in names if len(n) > 2}
 
 
-def swift_patterns(root: Path, targets: list[str]) -> dict:
-    """Each .swift target's declared names as one whole-word pattern, or None when no
-    name could be read from it (deleted, unreadable, or declaring nothing nameable)."""
+def base_swift_names(root: Path, mb: str | None, rel: str):
+    """Names rel declared at merge-base mb: a set (empty when the change added it), or
+    SKIPPED when it was present there but could not be read as text."""
+    if mb is None:
+        return SKIPPED
+    mode = _mode(root, mb, rel)
+    if mode is None or mode == SYMLINK_MODE:
+        return set()
+    raw = _blob(root, mb, rel)
+    if raw is None or len(raw) > MAX_FILE_BYTES:
+        return SKIPPED
+    try:
+        return swift_names(raw.decode("utf-8", errors="strict"))
+    # UnicodeError, not UnicodeDecodeError: a test mutates that literal and needs it once.
+    except UnicodeError:
+        return SKIPPED
+
+
+def swift_patterns(root: Path, targets: list[str], base: str | None = None) -> dict:
+    """Each .swift target's declared names as one whole-word pattern, or None when they
+    could not be read (deleted with no base, unreadable, or declaring nothing nameable).
+
+    Given a base, the names the target declared at the merge-base count too: a PR that
+    renames or removes a declaration breaks the callers of the OLD name, which only the
+    base still declares (noteclarity PR 21, Codex [P2], 2026-11-09). The merge-base, not
+    the base ref itself, because changed_files diffs base...HEAD. A base copy that is
+    present but cannot be read hides the old names, so the target is None."""
+    mb = None
+    if base is not None:
+        r = subprocess.run(["git", "-C", str(root), "merge-base", base, "HEAD"],
+                           capture_output=True, text=True)
+        mb = r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
     out = {}
     for t in targets:
         if Path(t).suffix != SWIFT_SUFFIX:
             continue
         text = readable_text(root / t)
         names = swift_names(text) if isinstance(text, str) else set()
+        old = base_swift_names(root, mb, t) if base is not None else set()
+        if text is SKIPPED or old is SKIPPED:
+            names = set()
+        else:
+            names |= old
         out[t] = (re.compile(r"(?<![A-Za-z0-9_])(?:" + "|".join(map(re.escape, sorted(names)))
                              + r")(?![A-Za-z0-9_])") if names else None)
     return out
@@ -874,7 +910,8 @@ def swift_patterns(root: Path, targets: list[str]) -> dict:
 
 def find_dependents(root: Path, targets: list[str],
                     rename_pairs: list[tuple[str, str]] | None = None,
-                    declare_generated: bool = False
+                    declare_generated: bool = False,
+                    swift_map: dict | None = None
                     ) -> tuple[dict, int, list[str], list[tuple[str, str]]]:
     """Returns (dependents_by_target, files_scanned, scan_errors, generated_excluded).
 
@@ -927,7 +964,8 @@ def find_dependents(root: Path, targets: list[str],
     # lives in an Xcode project or Package.swift, and a test target that says
     # `@testable import <Module>` reaches that module's names from outside it.
     # Over-reporting is the safe direction (see word_token).
-    swift_map = swift_patterns(root, targets)
+    if swift_map is None:
+        swift_map = swift_patterns(root, targets)
     deps: dict[str, set] = {t: set() for t in targets}
     scanned, errors = 0, []
     # Paths that were actually read and searched, and unreadable viewers waiting on them.
@@ -1561,11 +1599,13 @@ def main() -> int:
     args = [a for a in args if a not in ("--json", "--declare-generated")]
     root = repo_root()
 
+    base = None
     if args and args[0] == "--changed-from":
         if len(args) < 2:
             sys.stderr.write("--changed-from needs a base ref\n")
             return 2
-        targets, rename_pairs = changed_files(root, args[1])
+        base = args[1]
+        targets, rename_pairs = changed_files(root, base)
         if not targets:
             sys.stderr.write(f"FATAL: no files changed vs {args[1]} — nothing to review\n")
             return 1
@@ -1582,8 +1622,9 @@ def main() -> int:
                          f"       that cannot find a string it was told is there is broken.\n")
         return 1
 
+    swift_map = swift_patterns(root, targets, base)
     deps, scanned, scan_errors, excluded = find_dependents(
-        root, targets, rename_pairs, declare_generated)
+        root, targets, rename_pairs, declare_generated, swift_map)
     # The third return value used to be discarded into `_`: files the sweep could not
     # read looked exactly like files with no dependents. They are now counted, named on
     # the console, and carried in the JSON as `unreadable`, so a partial sweep is
@@ -1624,7 +1665,7 @@ def main() -> int:
     # A Swift target with no readable declared name had no dependent searched for by name:
     # UNKNOWN, not empty. It joins `unreadable`, which review-pr.sh already counts as an
     # incomplete sweep, so the gate drops its all-clear without a client change.
-    unresolved = sorted(t for t, rx in swift_patterns(root, targets).items() if rx is None)
+    unresolved = sorted(t for t, rx in swift_map.items() if rx is None)
     if unresolved:
         sys.stderr.write(
             f"WARNING: no Swift declaration could be read from {', '.join(unresolved)}, so "
