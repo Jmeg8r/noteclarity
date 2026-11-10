@@ -48,6 +48,10 @@ MATCHING
       IMPORTER's own directory, not by rewriting the extension into another bare token:
       a sibling `'./<name>.js'` is only unambiguous once you know which directory it
       sits in — this repo's consumers have two same-named modules under one src/ tree.
+      Swift is resolved by the NAMES a file declares, because Swift has no per-file
+      import: a module's files use each other's declarations without naming the file, so
+      literal matching found zero dependents for a Swift type used in four other files
+      (noteclarity, Codex [P2], 2026-11-09). See swift_names().
       Everything else — shell, YAML, markdown, docs — is matched by literal reference to
       the file's path or basename, because in this repo a workflow referencing <dir>/<name>.sh
       or a runbook documenting it IS a dependent: change the flags and those break.
@@ -169,6 +173,15 @@ JS_FAMILY_SUFFIX = {".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"
 # is imported by the same name as the module it describes, so resolving one direction
 # without the other reports zero dependents for every changed stub.
 PY_FAMILY_SUFFIX = {".py", ".pyi"}
+# A Swift declaration at the start of a line: attributes, then modifiers (group 1), the
+# keyword (group 2) and the declared name (group 3). See swift_names().
+SWIFT_SUFFIX = ".swift"
+SWIFT_DECL_RE = re.compile(
+    r"(?:@[\w.]+(?:\([^)\n]*\))?\s+)*((?:[a-z]+(?:\([a-z]+\))?\s+)*)"
+    r"(class|struct|enum|protocol|actor|typealias|func|let|var|extension)\s+"
+    r"`?([A-Za-z_][A-Za-z0-9_]*)")
+# Visible only inside the declaring file, so no other file can be its dependent.
+SWIFT_FILE_PRIVATE = {"private", "fileprivate"}
 # A module named by a STRING at a loader call rather than by the import grammar. The
 # quotes make the name unambiguous at ANY length, which is what makes this the right
 # route for a name too short for word_token's floor -- lowering that floor instead was
@@ -813,6 +826,52 @@ def resolve_js_specifier(importer_rel: str, spec: str, known: set[str]) -> set[s
     return out
 
 
+def swift_names(text: str) -> set[str]:
+    """The names a .swift file declares for OTHER files to use: its non-private top-level
+    declarations, plus the members of its top-level extensions.
+
+    An extension's own type name is deliberately not one: `extension String` would make
+    every file that says String a dependent, so an extension is found by the members it
+    adds. Line-based and keyed on indentation rather than a parser, so a missed name
+    under-reports; a file that yields no name at all is reported unresolved by main(),
+    never as having no dependents. Names of 1-2 characters are dropped for the reason
+    word_token gives.
+    """
+    names: set[str] = set()
+    member = None  # inside a top-level extension: its members' indent once seen, else -1
+    for line in text.splitlines():
+        body = line.lstrip()
+        if not body or body.startswith(("//", "/*", "*", "#")):
+            continue
+        indent = len(line) - len(body)
+        m = SWIFT_DECL_RE.match(body)
+        if indent == 0:
+            member = -1 if m and m.group(2) == "extension" else None
+            if member is not None:
+                continue
+        elif member is None or not m or member not in (-1, indent):
+            continue
+        else:
+            member = indent
+        if m and not SWIFT_FILE_PRIVATE & set(m.group(1).split()):
+            names.add(m.group(3))
+    return {n for n in names if len(n) > 2}
+
+
+def swift_patterns(root: Path, targets: list[str]) -> dict:
+    """Each .swift target's declared names as one whole-word pattern, or None when no
+    name could be read from it (deleted, unreadable, or declaring nothing nameable)."""
+    out = {}
+    for t in targets:
+        if Path(t).suffix != SWIFT_SUFFIX:
+            continue
+        text = readable_text(root / t)
+        names = swift_names(text) if isinstance(text, str) else set()
+        out[t] = (re.compile(r"(?<![A-Za-z0-9_])(?:" + "|".join(map(re.escape, sorted(names)))
+                             + r")(?![A-Za-z0-9_])") if names else None)
+    return out
+
+
 def find_dependents(root: Path, targets: list[str],
                     rename_pairs: list[tuple[str, str]] | None = None,
                     declare_generated: bool = False
@@ -864,6 +923,11 @@ def find_dependents(root: Path, targets: list[str],
     # targets stay exact; only package targets match by prefix.
     pkg_map = {t: Path(t).stem == "__init__" and Path(t).suffix in PY_FAMILY_SUFFIX
                for t in targets}
+    # Searched in EVERY tracked .swift file, not just the target's module: membership
+    # lives in an Xcode project or Package.swift, and a test target that says
+    # `@testable import <Module>` reaches that module's names from outside it.
+    # Over-reporting is the safe direction (see word_token).
+    swift_map = swift_patterns(root, targets)
     deps: dict[str, set] = {t: set() for t in targets}
     scanned, errors = 0, []
     # Paths that were actually read and searched, and unreadable viewers waiting on them.
@@ -911,6 +975,8 @@ def find_dependents(root: Path, targets: list[str],
                    if f.suffix in PY_FAMILY_SUFFIX else None)
         for t, tokens in token_map.items():
             wrx = word_map.get(t)
+            if wrx is None and f.suffix == SWIFT_SUFFIX:
+                wrx = swift_map.get(t)
             named = (t in resolved or any(tok in text for tok in tokens)
                      or (wrx is not None and wrx.search(text) is not None))
             imported = imports is not None and _py_match(form_map[t], pkg_map[t], imports)
@@ -1555,12 +1621,22 @@ def main() -> int:
         sys.stderr.write("FATAL: control passed but the sweep scanned 0 files — UNKNOWN, "
                          "not 'no dependents'.\n")
         return 1
+    # A Swift target with no readable declared name had no dependent searched for by name:
+    # UNKNOWN, not empty. It joins `unreadable`, which review-pr.sh already counts as an
+    # incomplete sweep, so the gate drops its all-clear without a client change.
+    unresolved = sorted(t for t, rx in swift_patterns(root, targets).items() if rx is None)
+    if unresolved:
+        sys.stderr.write(
+            f"WARNING: no Swift declaration could be read from {', '.join(unresolved)}, so "
+            f"its dependents were never searched by name; this blast radius is INCOMPLETE, "
+            f"not proven empty.\n")
     total = sorted({d for s in deps.values() for d in s})
 
     if as_json:
         print(json.dumps({
             "targets": targets, "files_scanned": scanned,
-            "unreadable": sorted(scan_errors),
+            "unreadable": sorted(set(scan_errors) | set(unresolved)),
+            "unresolved": unresolved,
             "generated_excluded": [{"path": v, "source": s} for v, s in sorted(excluded)],
             "control": control_msg,
             "dependents": {t: sorted(v) for t, v in deps.items()},

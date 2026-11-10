@@ -13,7 +13,7 @@
 #       the standards comment differ. Keep it that way so fixes carry over, and re-sync
 #       from the forge copy, not a local checkout (a stale one still has 30-minute limits).
 # GATE KIT: bin/review-pr.sh and bin/blast-radius.py are byte-identical copies of
-#       sovereign-forge's bin/ (copied from its origin/main @ a5f5ff0). Never edit
+#       sovereign-forge's bin/ (copied from its origin/main @ 6e766d0). Never edit
 #       them here; fix upstream and re-copy. sovereign-forge's bin/check-gate-kit.sh
 #       verifies the `cmp` daily, and that this job stays in the arm64 review lane.
 #
