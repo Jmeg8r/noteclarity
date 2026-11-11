@@ -365,6 +365,26 @@ if [ "$BR_GENERATED" -gt 0 ]; then
   echo "   blast radius: $BR_GENERATED generated viewer(s) not searched; their source was searched, or is a changed file under review:"
   printf '%s\n' "$BR_GENERATED_NOTE" | sed 's/^/     /'
 fi
+# Alias configs the resolver could not read by design (blast-radius.py, PR #211 spec R7)
+# and assumed to set no paths or baseUrl. A NOTE beside the all-clear, never UNKNOWN.
+# Absent or null is none; a list of non-empty strings is accepted; anything else is
+# fatal, as for generated_excluded. The text comes from the PR's own JSON, so it is
+# neutralized rather than refused: anything outside printable ASCII, and every backtick,
+# becomes "?", and each note sits alone in a code span -- no forged "### " line, no markup.
+ALIAS_NOTE_LIMIT=10
+BR_ALIAS=$(echo "$BR_JSON" | jq 'if .alias_notes == null then 0
+  elif (.alias_notes|type) == "array" and (.alias_notes | all(type == "string" and length > 0))
+  then .alias_notes | length
+  else error("alias_notes is not a list of strings") end') \
+  || die "the resolver's alias_notes list is malformed — which alias configs it assumed empty is UNKNOWN, refusing to post a verdict over it"
+BR_ALIAS_NOTE=$(echo "$BR_JSON" | jq -r --argjson n "$ALIAS_NOTE_LIMIT" '(.alias_notes // [])
+  | (.[:$n][] | "- `" + gsub("[^ -~]|`"; "?") + "`"),
+    (if length > $n then "- …and \(length - $n) more; the CI log lists every one." else empty end)') \
+  || die "could not render the resolver's alias_notes"
+if [ "$BR_ALIAS" -gt 0 ]; then
+  echo "   blast radius: $BR_ALIAS alias config(s) assumed to set no paths or baseUrl:"
+  printf '%s\n' "$BR_ALIAS_NOTE" | sed 's/^/     /'
+fi
 
 # Context FILE-COUNT budget — independent of the byte budget below. The broker enforces
 # TWO separate caps (review-broker.py MAX_BYTES=400,000 OR MAX_FILES=120, either one
@@ -434,35 +454,9 @@ echo "   standards: $STD_COUNT extracted from CLAUDE.md"
 
 # ---- 4a. the changed-file diffs, MEASURED as they are built -----------------------
 REQ=$(mktemp); DTMP=$(mktemp); CJSON=$(mktemp); trap 'rm -f "$REQ" "$DTMP" "$CJSON" "$LEDGER_PLAN" "$_LP"' EXIT
-# The context budget in 4b is derived from this measurement instead of a fixed guess
-# at what the diff would cost. It used to be a guess: CONTEXT_BUDGET was a flat
-# 300,000, which silently assumed the diff plus everything else would fit in the
-# remaining 100,000. But the per-file diff cap is 60,000 and the changed-file count is
-# unbounded, so two large changed files plus a routine ten-dependent blast radius came
-# to ~420,000 against the broker's 400,000. The broker refuses rather than trims, so
-# the whole request is rejected, the gate dies with no verdict, and forge-pr fails
-# closed on the missing verdict — a merge blocked by arithmetic nobody could see.
-# Codex [P2].
-# The per-file cap is DERIVED from the broker's own budget rather than picked. A flat
-# 60,000 made the gate UNINSTALLABLE: this gate's own bin/blast-radius.py crossed that
-# line on 2026-08-30 (84ac987, 60,261 bytes) and a fresh install PR carries it as a
-# 61,500-byte new-file diff, so review-pr.sh refused to review the PR that installs
-# review-pr.sh. Nobody noticed because no repo had been onboarded since that date.
-#
-# A quarter of the request budget is the rule: no single file may consume more than 25%
-# of what the broker will accept, which leaves room for at least three more changed
-# files plus the standards and blast radius before the whole-request check below fires.
-# The cap's PURPOSE is unchanged and does not depend on the number — it refuses to send
-# a truncated diff while claiming the file was examined. Only the threshold moves, and
-# it now moves automatically if the broker's budget ever does, instead of silently
-# drifting out of proportion to it the way the flat value did.
-#
-# BROKER_MAX_BYTES is defined in 4b below, after this block. It is repeated as a literal
-# here ON PURPOSE rather than reordered: 4b's value is the one the whole-request check
-# uses, and moving it up to satisfy this arithmetic would put the definition far from the
-# comment explaining how it is kept in sync with review-broker.py. The guard immediately
-# after keeps the two honest, so a future edit to one that forgets the other FAILS rather
-# than quietly re-introducing a hand-picked cap.
+# The context budget in 4b is derived from this measured diff, not guessed. The per-file
+# cap is a quarter of the broker's 400,000-byte budget, repeated as a literal on purpose;
+# the guard after it keeps the two in sync. Why: sovereign-forge docs/review-pr-rationale.md#diff-cap.
 DIFF_CAP=$(( 400000 / 4 ))
 DIFF_BYTES=0
 {
@@ -1154,61 +1148,13 @@ fi
 # makes forge-pr raise rather than merge. The changed-file segment is therefore appended
 # AFTER it, never inserted before.
 #
-# The zero-findings sentence is COVERAGE-AWARE, and the coverage note below exists,
-# because the flat sentence made a claim the review had not earned: "No findings in the
-# changed code or its blast radius" went out on PR #58 at 2/10 examined, where zero of the
-# 8 blast-radius files were opened. The numbers in the meta line were correct and the
-# prose beside them contradicted them — the same "reviewed less than it claimed" shape as
-# the truncation and partial-examination defects above, arriving in the one artifact a
-# human actually reads. The honest line existed only as an `echo` to the CI console
-# (section 5's NOTE), which nobody reads on a green run.
-#
-# The note renders for EVERY verdict, not just a clean one: "2 findings" beside "8 of 10
-# unread" is exactly as material to a reader as "no findings" beside it. It asserts only
-# the two counts and never which files were skipped — the changed-file guard above holds
-# for a PASS only, so on a concerns/fail comment "the unread ones were all context" would
-# be an inference this script cannot make.
-#
-# REPORTS THE TWO RATIOS AS GIVEN, and derives nothing. Written against the whole
-# value-shape domain rather than the case that prompted it, because the two shortfalls
-# are independent and the first two attempts each fixed one cell and broke another
-# (Codex [P2] on PR #67, three rounds). With A = supplied - examined and
-# B = changed - examined_changed:
-#   A=0 B=0  no note.
-#   A>0 B=0  aggregate short; changed files complete.
-#   A=0 B>0  the two self-reports CONTRADICT each other -- changed files are a subset of
-#            supplied, so "read every supplied file" and "missed a changed file" cannot
-#            both hold. Permitted here: the coherence guard above catches only
-#            examined_changed > examined, and it is gated on a PASS besides. Rendering
-#            "0 of 3 supplied file(s) went unread" was the contradiction that killed the
-#            subtraction form.
-#   A>0 B>0  both short.
-# A derived difference is false or absurd in two of those four; the raw pair is true in
-# all four, including the incoherent one, and the reader can see the disagreement. The
-# closing sentence says "only what was read" for the same reason -- "not every supplied
-# file" contradicts examined == supplied in the third row.
-#
-# Keyed on EITHER shortfall, never the aggregate alone. files_examined == supplied with
-# files_examined_changed < changed is a combination the broker and this script deliberately
-# permit on a concerns/fail verdict (the changed-file guards above are gated on a PASS), and
-# keying only on the aggregate suppressed the warning exactly there -- a comment reading
-# "3/3 supplied file(s) examined" with no note while a CHANGED file went unread. That is the
-# aggregate-vs-changed lesson this gate already learned once, arriving in the prose layer
-# (Codex [P2] on PR #67, second round). The sentence reads from the same condition so both
-# follow one rule instead of a chain of assumptions about which verdicts carry zero findings.
-#
-# Hence "not every supplied file" and NOT "not the whole blast radius". The blast-radius
-# wording was this fix's own version of the overclaim it was written to remove: on a
-# concerns/fail verdict the shortfall can be a CHANGED file (2/3 examined, 1/2 changed
-# read is reachable and permitted), and naming the blast radius there points the reader
-# away from unreviewed changed code (Codex [P2] on PR #67). The counts say which; the
-# prose must not guess.
-#
-# It cannot be mistaken for a finding by forge-pr: FINDING_RE anchors on "### " plus a
-# severity emoji, and this line is a blockquote. Verified against the deployed parser.
+# The zero-findings sentence is coverage-aware, and the coverage note renders on every
+# verdict, reporting the two ratios as given and deriving nothing. It is a blockquote, so
+# forge-pr's FINDING_RE never counts it. Why: sovereign-forge docs/review-pr-rationale.md#coverage-note.
 BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR_SCANNED" \
   --arg generated "$GENERATED_NOTE" \
   --arg brgen "$BR_GENERATED_NOTE" --argjson brgencount "$BR_GENERATED" \
+  --arg bralias "$BR_ALIAS_NOTE" --argjson braliascount "$BR_ALIAS" \
   --argjson changed "${#CHANGED[@]}" --argjson skipped "$CTX_SKIPPED" \
   --argjson truncated "$CTX_TRUNCATED" --argjson omitted "$CTX_OMITTED" \
   --argjson unreadable "$BR_UNREADABLE" --argjson stdzerodocs "$STD_ZERO_DOCS" \
@@ -1282,6 +1228,14 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
       "the blast-radius resolver; the source each is compiled from was searched instead, " +
       "or is itself one of the changed files under review:\n" +
       ($brgen | split("\n") | map(select(. != "")) | map("> " + .) | join("\n")) + "\n\n"
+    else "" end) +
+  # Alias configs assumed to set no paths or baseUrl (section 2). An ℹ️ like the line
+  # above: a NOTE, so the all-clear stands. $bralias was neutralized in section 2.
+   (if $braliascount > 0 then
+      "> ℹ️ " + ($braliascount|tostring) + " alias config(s) could not be read by the " +
+      "blast-radius resolver by design and were assumed to set no `paths` or `baseUrl`, " +
+      "so imports through aliases they define were not matched:\n" +
+      ($bralias | split("\n") | map(select(. != "")) | map("> " + .) | join("\n")) + "\n\n"
     else "" end) +
   # The two cuts made by the context budget, disclosed beside the refusal above and for the same
   # reason: files_examined counts what was SENT, so neither cut can show up as a
