@@ -109,7 +109,7 @@ jobs:
         run: |
           git fetch origin main --quiet
           mkdir -p "$RUNNER_TEMP/gate"
-          for f in review-pr.sh blast-radius.py; do
+          for f in $(git show origin/main:bin/review-pr.sh | sed -n 's/^# GATE-KIT: //p' | grep '[^[:space:]]' || echo GATE-KIT-MANIFEST-MISSING); do
             git show "origin/main:bin/$f" > "$RUNNER_TEMP/gate/$f" \
               || { echo "::error::bin/$f absent on protected base — refusing to run an unpinned gate"; exit 1; }
             chmod +x "$RUNNER_TEMP/gate/$f"
