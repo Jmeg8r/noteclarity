@@ -107,10 +107,10 @@ jobs:
       # so once the workflow runs from base the scripts are there by construction.
       - name: Materialize the gate scripts from the protected base
         run: |
-          git fetch origin main --quiet
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main --quiet
           mkdir -p "$RUNNER_TEMP/gate"
-          for f in $(git show origin/main:bin/review-pr.sh | sed -n 's/^# GATE-KIT: //p' | grep '[^[:space:]]' || echo GATE-KIT-MANIFEST-MISSING); do
-            git show "origin/main:bin/$f" > "$RUNNER_TEMP/gate/$f" \
+          for f in $(git show refs/remotes/origin/main:bin/review-pr.sh | sed -n 's/^# GATE-KIT: //p' | grep '[^[:space:]]' || echo GATE-KIT-MANIFEST-MISSING); do
+            git show "refs/remotes/origin/main:bin/$f" > "$RUNNER_TEMP/gate/$f" \
               || { echo "::error::bin/$f absent on protected base — refusing to run an unpinned gate"; exit 1; }
             chmod +x "$RUNNER_TEMP/gate/$f"
           done
@@ -132,7 +132,7 @@ jobs:
         run: |
           # Force-update the local base ref and FAIL CLOSED if the fetch fails, so
           # a stale main on a reused runner cannot supply obsolete standards.
-          git fetch origin "+${{ github.base_ref }}:${{ github.base_ref }}"
+          git fetch --no-tags origin "+refs/heads/${{ github.base_ref }}:refs/heads/${{ github.base_ref }}"
           bash "$RUNNER_TEMP/gate/review-pr.sh" \
             --pr "${{ github.event.number }}" \
             --base "${{ github.base_ref }}"
